@@ -3,6 +3,9 @@
 package com.ovehbe.junkboy.ui.compose.screens
 
 import android.Manifest
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Intent
 import android.content.pm.PackageManager
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -22,6 +25,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.core.content.ContextCompat
+import androidx.core.content.FileProvider
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.ovehbe.junkboy.database.AppDatabase
@@ -32,6 +36,10 @@ import com.ovehbe.junkboy.pipeline.*
 import com.ovehbe.junkboy.ui.theme.DesignColors
 import com.ovehbe.junkboy.ui.theme.DesignSpacing
 import com.ovehbe.junkboy.utils.PreferencesManager
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import java.io.File
 
 /**
  * Ordered pipeline editor. A message enters at the top, each enabled step that matches runs its
@@ -47,6 +55,33 @@ fun PipelineScreen() {
     var editingIsNew by remember { mutableStateOf(false) }
     var showPoliticalDialog by remember { mutableStateOf(false) }
     var showResetDialog by remember { mutableStateOf(false) }
+    var showExport by remember { mutableStateOf(false) }
+    var exportText by remember { mutableStateOf("") }
+    var showImport by remember { mutableStateOf(false) }
+    var importText by remember { mutableStateOf("") }
+    var importError by remember { mutableStateOf<String?>(null) }
+    val scope = rememberCoroutineScope()
+    val importFileLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocument()
+    ) { uri ->
+        if (uri != null) {
+            scope.launch {
+                try {
+                    val text = withContext(Dispatchers.IO) {
+                        context.contentResolver.openInputStream(uri)?.bufferedReader()?.use { it.readText() }
+                    }
+                    if (text != null) {
+                        importText = text
+                        importError = null
+                    } else {
+                        importError = "Could not read that file"
+                    }
+                } catch (e: Exception) {
+                    importError = "Could not read that file: ${e.message}"
+                }
+            }
+        }
+    }
     val database = remember { AppDatabase.getDatabase(context) }
     var contactsGranted by remember {
         mutableStateOf(
@@ -121,6 +156,117 @@ fun PipelineScreen() {
         )
     }
 
+    if (showExport) {
+        AlertDialog(
+            onDismissRequest = { showExport = false },
+            title = { Text("Export pipeline") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(DesignSpacing.SM)) {
+                    Text(
+                        "Save this as a .yaml file, keep it in version control, or paste it into another install.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = DesignColors.Secondary
+                    )
+                    Column(
+                        modifier = Modifier
+                            .heightIn(max = 320.dp)
+                            .verticalScroll(rememberScrollState())
+                            .background(DesignColors.Background, RoundedCornerShape(6.dp))
+                            .padding(DesignSpacing.SM)
+                    ) {
+                        Text(
+                            exportText,
+                            style = MaterialTheme.typography.bodySmall,
+                            fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace
+                        )
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    val clipboard = context.getSystemService(ClipboardManager::class.java)
+                    clipboard?.setPrimaryClip(ClipData.newPlainText("Junkboy pipeline", exportText))
+                }) { Text("Copy") }
+            },
+            dismissButton = {
+                Row {
+                    TextButton(onClick = {
+                        try {
+                            val file = File(context.cacheDir, "junkboy-pipeline.yaml")
+                            file.writeText(exportText)
+                            val uri = FileProvider.getUriForFile(
+                                context,
+                                "${context.packageName}.fileprovider",
+                                file
+                            )
+                            val send = Intent(Intent.ACTION_SEND).apply {
+                                type = "text/yaml"
+                                putExtra(Intent.EXTRA_STREAM, uri)
+                                putExtra(Intent.EXTRA_SUBJECT, "Junkboy pipeline")
+                                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                            }
+                            context.startActivity(Intent.createChooser(send, "Share pipeline"))
+                        } catch (e: Exception) {
+                            // Fall back to copying if there is no share target
+                            val clipboard = context.getSystemService(ClipboardManager::class.java)
+                            clipboard?.setPrimaryClip(ClipData.newPlainText("Junkboy pipeline", exportText))
+                        }
+                        showExport = false
+                    }) { Text("Share") }
+                    TextButton(onClick = { showExport = false }) { Text("Close") }
+                }
+            }
+        )
+    }
+
+    if (showImport) {
+        AlertDialog(
+            onDismissRequest = { showImport = false },
+            title = { Text("Import pipeline") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(DesignSpacing.SM)) {
+                    Text(
+                        "Paste YAML, or open a .yaml file. Importing replaces the current pipeline.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = DesignColors.Secondary
+                    )
+                    OutlinedTextField(
+                        value = importText,
+                        onValueChange = { importText = it; importError = null },
+                        label = { Text("YAML") },
+                        minLines = 6,
+                        maxLines = 10,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    importError?.let {
+                        Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+                    }
+                    TextButton(onClick = { importFileLauncher.launch(arrayOf("*/*")) }) {
+                        Text("Open file")
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    enabled = importText.isNotBlank(),
+                    onClick = {
+                        try {
+                            val imported = PipelineYaml.import(importText)
+                            save(imported)
+                            showImport = false
+                            importText = ""
+                        } catch (e: PipelineFormatException) {
+                            importError = e.message
+                        } catch (e: Exception) {
+                            importError = "Import failed: ${e.message}"
+                        }
+                    }
+                ) { Text("Import") }
+            },
+            dismissButton = { TextButton(onClick = { showImport = false }) { Text("Cancel") } }
+        )
+    }
+
     LazyColumn(
         modifier = Modifier
             .fillMaxSize()
@@ -143,6 +289,17 @@ fun PipelineScreen() {
                 color = DesignColors.Secondary,
                 modifier = Modifier.padding(top = DesignSpacing.XS, bottom = DesignSpacing.SM)
             )
+            Row(horizontalArrangement = Arrangement.spacedBy(DesignSpacing.SM)) {
+                OutlinedButton(onClick = {
+                    exportText = PipelineYaml.export(pipeline)
+                    showExport = true
+                }) { Text("Export YAML") }
+                OutlinedButton(onClick = {
+                    importText = ""
+                    importError = null
+                    showImport = true
+                }) { Text("Import YAML") }
+            }
         }
 
         if (!contactsGranted) {
