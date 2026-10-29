@@ -1,5 +1,8 @@
 package com.ovehbe.junkboy.pipeline
 
+import com.ovehbe.junkboy.database.FilterType
+import com.ovehbe.junkboy.database.MessageCategory
+import com.ovehbe.junkboy.filters.FilterResult
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -81,6 +84,30 @@ class SampleMessagesTest {
         assertTrue(ids.any { it.startsWith("personal-") })
         assertTrue(ids.any { it.startsWith("scam-") })
         assertTrue(SampleMessages.all.any { it.body.contains("Uncle", ignoreCase = true) })
+    }
+
+    @Test
+    fun `model verdicts replace the rule verdicts`() {
+        val allJunk = { _: SampleMessage ->
+            FilterResult(true, MessageCategory.JUNK, FilterType.ML_CLASSIFICATION, 0.9f)
+        }
+        val results = SampleMessages.run(pipeline, verdictResolver = allJunk)
+
+        assertTrue(results.all { it.verdict.isBlocked })
+        assertTrue(results.all { it.evaluation.blocked })
+        assertEquals(4, results.count { it.evaluation.replyStop })
+    }
+
+    @Test
+    fun `a clean model verdict leaves the fixture unblocked`() {
+        val clean = { _: SampleMessage ->
+            FilterResult(false, MessageCategory.GENERAL, FilterType.ML_CLASSIFICATION, 0.9f)
+        }
+        val results = SampleMessages.run(pipeline, verdictResolver = clean)
+
+        assertTrue(results.all { !it.verdict.isBlocked })
+        assertTrue(results.none { it.evaluation.blocked })
+        assertEquals(4, results.count { it.evaluation.replyStop })
     }
 
     @Test

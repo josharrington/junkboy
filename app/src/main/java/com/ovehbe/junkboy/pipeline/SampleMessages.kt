@@ -246,8 +246,12 @@ object SampleMessages {
             customRegexPatterns = emptyList()
         )
 
-    fun context(sample: SampleMessage, resolvedHasOtp: Boolean = sample.hasOtp): MessageContext {
-        val verdict = verdict(sample)
+    fun context(
+        sample: SampleMessage,
+        resolvedHasOtp: Boolean = sample.hasOtp,
+        verdictOverride: FilterResult? = null
+    ): MessageContext {
+        val verdict = verdictOverride ?: verdict(sample)
         return MessageContext(
             sender = sample.sender,
             body = sample.body,
@@ -264,13 +268,18 @@ object SampleMessages {
         )
     }
 
-    fun run(pipeline: Pipeline, otpResolver: (SampleMessage) -> Boolean = { it.hasOtp }): List<SampleResult> =
+    fun run(
+        pipeline: Pipeline,
+        otpResolver: (SampleMessage) -> Boolean = { it.hasOtp },
+        verdictResolver: (SampleMessage) -> FilterResult = { verdict(it) }
+    ): List<SampleResult> =
         all.map { sample ->
-            val context = context(sample, otpResolver(sample))
+            val verdict = verdictResolver(sample)
+            val context = context(sample, otpResolver(sample), verdict)
             SampleResult(
                 sample = sample,
                 evaluation = PipelineRunner.evaluate(pipeline, context),
-                verdict = verdict(sample)
+                verdict = verdict
             )
         }
 }
