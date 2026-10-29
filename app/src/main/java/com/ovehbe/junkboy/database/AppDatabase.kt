@@ -10,7 +10,7 @@ import android.content.Context
 
 @Database(
     entities = [FilteredMessage::class, AllowedSender::class, ChatMessage::class, AutoReplyLog::class],
-    version = 5,
+    version = 6,
     exportSchema = false
 )
 @TypeConverters(Converters::class)
@@ -41,6 +41,13 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        private val MIGRATION_5_6 = object : Migration(5, 6) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE `filtered_messages` ADD COLUMN `isTestMode` INTEGER NOT NULL DEFAULT 0")
+                db.execSQL("ALTER TABLE `filtered_messages` ADD COLUMN `decisionSummary` TEXT NOT NULL DEFAULT ''")
+            }
+        }
+
         @Volatile
         private var INSTANCE: AppDatabase? = null
         
@@ -51,7 +58,7 @@ abstract class AppDatabase : RoomDatabase() {
                     AppDatabase::class.java,
                     "junkboy_database"
                 )
-                .addMigrations(MIGRATION_3_4, MIGRATION_4_5)
+                .addMigrations(MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6)
                 .fallbackToDestructiveMigration()
                 .build()
                 INSTANCE = instance

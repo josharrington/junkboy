@@ -15,8 +15,10 @@ import com.ovehbe.junkboy.filters.ContentAllowlist
 import com.ovehbe.junkboy.filters.CustomFilter
 import com.ovehbe.junkboy.filters.FilterResult
 import com.ovehbe.junkboy.filters.Stop2EndDetector
+import com.ovehbe.junkboy.pipeline.ExecutionPlan
 import com.ovehbe.junkboy.pipeline.MessageContext
 import com.ovehbe.junkboy.pipeline.PipelineRunner
+import com.ovehbe.junkboy.pipeline.decisionSummary
 import com.ovehbe.junkboy.utils.AutoReplyEngine
 import com.ovehbe.junkboy.utils.SenderHistoryChecker
 import com.ovehbe.junkboy.utils.PreferencesManager
@@ -236,6 +238,8 @@ class SmsFilterService : Service() {
                     allowedByContent = allowedByContent
                 )
                 val evaluation = PipelineRunner.evaluate(pipeline, context)
+                val enforcing = preferencesManager.isEnforcementEnabled()
+                val plan = ExecutionPlan.forMode(evaluation, enforcing)
 
                 val isAllowed = evaluation.category == MessageCategory.ALLOWED
                 val filterType = when {
@@ -251,30 +255,33 @@ class SmsFilterService : Service() {
                     category = evaluation.category,
                     confidence = filterResult.confidence,
                     filterType = filterType,
-                    isBlocked = evaluation.blocked,
+                    isBlocked = plan.block,
                     isUserOverride = isAllowed,
-                    isRead = false
+                    isRead = false,
+                    isTestMode = !enforcing,
+                    decisionSummary = if (enforcing) "" else evaluation.decisionSummary()
                 )
 
                 val messageId = database.filteredMessageDao().insertMessage(filteredMessage)
 
-                Log.d(TAG, "Pipeline: category=${evaluation.category} blocked=${evaluation.blocked} " +
-                    "by=${evaluation.blockedBy ?: "-"} muted=${evaluation.muted} reply=${evaluation.replyStop}")
+                Log.d(TAG, "Pipeline (${if (enforcing) "enforce" else "test"}): " +
+                    "category=${evaluation.category} blocked=${plan.block} " +
+                    "by=${evaluation.blockedBy ?: "-"} muted=${evaluation.muted} reply=${plan.replyStop}")
 
-                if (!evaluation.blocked && !evaluation.muted) {
+                if (plan.notify) {
                     notificationHelper.showSmsNotification(
                         filteredMessage.copy(id = messageId),
                         evaluation.blockedBy ?: evaluation.repliedBy ?: filterResult.matchedRule
                     )
                 }
 
-                if (!evaluation.blocked) {
+                if (!plan.block) {
                     otpHelper.detectAndCopyOtp(message, "SMS")
                 }
 
                 // Safety envelope: never reply to a contact, an OTP message, or an allow-listed sender,
                 // whatever the pipeline says. The per-sender cooldown lives in AutoReplyEngine.
-                if (evaluation.replyStop) {
+                if (plan.replyStop) {
                     if (context.isContact || context.hasOtp || context.allowedBySender || context.allowedByContent) {
                         Log.w(TAG, "Refusing STOP reply: safety guard (contact/OTP/allowed)")
                     } else {
@@ -282,8 +289,8 @@ class SmsFilterService : Service() {
                     }
                 }
 
-                val shouldDelete = evaluation.delete ||
-                    (evaluation.blocked && preferencesManager.isAutoDeleteJunkEnabled())
+                val shouldDelete = plan.delete ||
+                    (enforcing && evaluation.blocked && preferencesManager.isAutoDeleteJunkEnabled())
                 if (shouldDelete) {
                     try {
                         val deleted = smsDeleter.deleteJunkSms(sender, message, timestamp)
@@ -300,7 +307,7 @@ class SmsFilterService : Service() {
                     Log.i(TAG, "Successfully blocked obvious junk message from $sender - broadcast aborted")
                 }
 
-                updateFilteringStats(evaluation.category, evaluation.blocked)
+                updateFilteringStats(evaluation.category, plan.block)
                 
             } catch (e: Exception) {
                 Log.e(TAG, "Error processing SMS", e)

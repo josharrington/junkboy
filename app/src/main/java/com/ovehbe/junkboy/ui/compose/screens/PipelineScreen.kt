@@ -58,6 +58,7 @@ fun PipelineScreen(onOpenLab: () -> Unit = {}, onOpenSuggested: () -> Unit = {})
     var editingIsNew by remember { mutableStateOf(false) }
     var showPoliticalDialog by remember { mutableStateOf(false) }
     var showResetDialog by remember { mutableStateOf(false) }
+    var enforcing by remember { mutableStateOf(preferencesManager.isEnforcementEnabled()) }
     var showExport by remember { mutableStateOf(false) }
     var exportText by remember { mutableStateOf("") }
     var showImport by remember { mutableStateOf(false) }
@@ -304,6 +305,52 @@ fun PipelineScreen(onOpenLab: () -> Unit = {}, onOpenSuggested: () -> Unit = {})
                 color = DesignColors.Secondary,
                 modifier = Modifier.padding(top = DesignSpacing.XS, bottom = DesignSpacing.SM)
             )
+
+            Card(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(bottom = DesignSpacing.SM),
+                colors = CardDefaults.cardColors(containerColor = DesignColors.InputBackground)
+            ) {
+                Column(Modifier.padding(DesignSpacing.SM)) {
+                    Text(
+                        "Mode",
+                        style = MaterialTheme.typography.titleSmall,
+                        color = DesignColors.Primary
+                    )
+                    Row(horizontalArrangement = Arrangement.spacedBy(DesignSpacing.SM)) {
+                        FilterChip(
+                            selected = enforcing,
+                            onClick = {
+                                enforcing = true
+                                preferencesManager.setEnforcementEnabled(true)
+                            },
+                            label = { Text("Enforcing") }
+                        )
+                        FilterChip(
+                            selected = !enforcing,
+                            onClick = {
+                                enforcing = false
+                                preferencesManager.setEnforcementEnabled(false)
+                            },
+                            label = { Text("Testing") }
+                        )
+                    }
+                    Text(
+                        if (enforcing) {
+                            "Pipeline actions are performed: blocks suppress messages, STOP replies are sent, " +
+                                "mutes and deletes apply."
+                        } else {
+                            "Nothing is performed. Every message is delivered and notified, and the decision " +
+                                "is recorded in the message list so you can tune the steps first."
+                        },
+                        style = MaterialTheme.typography.bodySmall,
+                        color = if (enforcing) DesignColors.Secondary else MaterialTheme.colorScheme.error,
+                        modifier = Modifier.padding(top = DesignSpacing.XS)
+                    )
+                }
+            }
+
             Row(horizontalArrangement = Arrangement.spacedBy(DesignSpacing.SM)) {
                 OutlinedButton(onClick = {
                     exportText = PipelineYaml.export(pipeline)

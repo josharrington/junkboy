@@ -75,6 +75,9 @@ class PreferencesManager(context: Context) {
         // The message pipeline (JSON). Replaces the individual filter/reply toggles going forward.
         private const val KEY_PIPELINE = "message_pipeline"
         private const val KEY_PIPELINE_MIGRATED = "message_pipeline_migrated"
+
+        // Enforcing performs pipeline actions; testing only records what would happen.
+        private const val KEY_ENFORCEMENT_ENABLED = "pipeline_enforcement_enabled"
         
         // Hub configuration
         private const val KEY_HUB_ENABLED = "hub_enabled"
@@ -337,6 +340,10 @@ class PreferencesManager(context: Context) {
         prefs.edit().putString(KEY_PIPELINE, gson.toJson(pipeline)).apply()
 
     fun resetPipeline() = setPipeline(PipelineDefaults.default())
+
+    fun isEnforcementEnabled(): Boolean = prefs.getBoolean(KEY_ENFORCEMENT_ENABLED, true)
+    fun setEnforcementEnabled(enabled: Boolean) =
+        prefs.edit().putBoolean(KEY_ENFORCEMENT_ENABLED, enabled).apply()
     
     // OTP Auto-Copy
     fun isOtpAutoCopyEnabled(): Boolean = prefs.getBoolean(KEY_OTP_AUTO_COPY_ENABLED, true)

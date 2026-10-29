@@ -48,7 +48,9 @@ class SmsReceiver : BroadcastReceiver() {
                 // Quick junk detection for immediate blocking
                 var shouldBlockBroadcast = false
                 val matchesAllowRule = ContentAllowlist.firstMatch(preferencesManager.getAllowRules(), fullMessageBody) != null
-                if (!matchesAllowRule && isObviousJunk(fullMessageBody, preferencesManager)) {
+                // Testing mode must not suppress delivery, so the receiver only aborts in enforcing mode.
+                if (!matchesAllowRule && isObviousJunk(fullMessageBody, preferencesManager) &&
+                    preferencesManager.isEnforcementEnabled()) {
                     Log.d(TAG, "Blocking obvious junk message from $sender")
                     shouldBlockBroadcast = true
                 }

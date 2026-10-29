@@ -14,7 +14,9 @@ data class SmsConversationSummary(
     val messageCount: Int,
     val unreadCount: Int,
     val lastCategory: MessageCategory,
-    val hasBlocked: Boolean
+    val hasBlocked: Boolean,
+    val lastIsTest: Boolean = false,
+    val lastDecisionSummary: String = ""
 )
 
 @Dao
@@ -112,6 +114,8 @@ interface FilteredMessageDao {
             COUNT(*) as messageCount,
             SUM(CASE WHEN isRead = 0 THEN 1 ELSE 0 END) as unreadCount,
             (SELECT category FROM filtered_messages fm2 WHERE fm2.sender = fm.sender ORDER BY receivedAt DESC LIMIT 1) as lastCategory,
+            (SELECT isTestMode FROM filtered_messages fm2 WHERE fm2.sender = fm.sender ORDER BY receivedAt DESC LIMIT 1) as lastIsTest,
+            (SELECT decisionSummary FROM filtered_messages fm2 WHERE fm2.sender = fm.sender ORDER BY receivedAt DESC LIMIT 1) as lastDecisionSummary,
             MAX(CASE WHEN isBlocked = 1 THEN 1 ELSE 0 END) as hasBlocked
         FROM filtered_messages fm
         WHERE isBlocked = 0
@@ -131,6 +135,8 @@ interface FilteredMessageDao {
             COUNT(*) as messageCount,
             SUM(CASE WHEN isRead = 0 THEN 1 ELSE 0 END) as unreadCount,
             (SELECT category FROM filtered_messages fm2 WHERE fm2.sender = fm.sender ORDER BY receivedAt DESC LIMIT 1) as lastCategory,
+            (SELECT isTestMode FROM filtered_messages fm2 WHERE fm2.sender = fm.sender ORDER BY receivedAt DESC LIMIT 1) as lastIsTest,
+            (SELECT decisionSummary FROM filtered_messages fm2 WHERE fm2.sender = fm.sender ORDER BY receivedAt DESC LIMIT 1) as lastDecisionSummary,
             MAX(CASE WHEN isBlocked = 1 THEN 1 ELSE 0 END) as hasBlocked
         FROM filtered_messages fm
         GROUP BY sender
@@ -149,6 +155,8 @@ interface FilteredMessageDao {
             COUNT(*) as messageCount,
             SUM(CASE WHEN isRead = 0 THEN 1 ELSE 0 END) as unreadCount,
             (SELECT category FROM filtered_messages fm2 WHERE fm2.sender = fm.sender ORDER BY receivedAt DESC LIMIT 1) as lastCategory,
+            (SELECT isTestMode FROM filtered_messages fm2 WHERE fm2.sender = fm.sender ORDER BY receivedAt DESC LIMIT 1) as lastIsTest,
+            (SELECT decisionSummary FROM filtered_messages fm2 WHERE fm2.sender = fm.sender ORDER BY receivedAt DESC LIMIT 1) as lastDecisionSummary,
             1 as hasBlocked
         FROM filtered_messages fm
         WHERE isBlocked = 1

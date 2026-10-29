@@ -501,6 +501,20 @@ private fun ConversationCard(
                         horizontalArrangement = Arrangement.spacedBy(DesignSpacing.XS),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
+                        if (conversation.lastIsTest) {
+                            Surface(
+                                color = MaterialTheme.colorScheme.secondaryContainer,
+                                shape = RoundedCornerShape(12.dp)
+                            ) {
+                                Text(
+                                    text = "TEST",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSecondaryContainer,
+                                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                )
+                            }
+                        }
+
                         // Category badge
                         Surface(
                             color = getCategoryColor(conversation.lastCategory).copy(alpha = 0.15f),
@@ -562,6 +576,16 @@ private fun ConversationCard(
                             }
                         }
                     }
+                }
+
+                if (conversation.lastIsTest && conversation.lastDecisionSummary.isNotEmpty()) {
+                    Text(
+                        text = conversation.lastDecisionSummary,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = DesignColors.Secondary,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
                 }
             }
         }
@@ -639,6 +663,20 @@ private fun MessageCard(
                     horizontalArrangement = Arrangement.spacedBy(DesignSpacing.XS),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
+                    if (message.isTestMode) {
+                        Surface(
+                            color = MaterialTheme.colorScheme.secondaryContainer,
+                            shape = RoundedCornerShape(12.dp)
+                        ) {
+                            Text(
+                                text = "TEST",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSecondaryContainer,
+                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 4.dp)
+                            )
+                        }
+                    }
+
                     // Category badge
                     Surface(
                         color = getCategoryColor(message.category).copy(alpha = 0.15f),
@@ -701,6 +739,14 @@ private fun MessageCard(
                 maxLines = 2,
                 overflow = TextOverflow.Ellipsis
             )
+
+            if (message.isTestMode && message.decisionSummary.isNotEmpty()) {
+                Text(
+                    text = message.decisionSummary,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = DesignColors.Secondary
+                )
+            }
             
             // Footer row
             Row(
