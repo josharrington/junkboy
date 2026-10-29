@@ -406,6 +406,7 @@ private fun ConversationCard(
     onAllowSender: () -> Unit
 ) {
     var showMenu by remember { mutableStateOf(false) }
+    var showDecision by remember { mutableStateOf(false) }
     
     Card(
         modifier = Modifier
@@ -501,6 +502,20 @@ private fun ConversationCard(
                         horizontalArrangement = Arrangement.spacedBy(DesignSpacing.XS),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
+                        if (conversation.lastIsTest) {
+                            Surface(
+                                color = MaterialTheme.colorScheme.secondaryContainer,
+                                shape = RoundedCornerShape(12.dp)
+                            ) {
+                                Text(
+                                    text = "TEST",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSecondaryContainer,
+                                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                )
+                            }
+                        }
+
                         // Category badge
                         Surface(
                             color = getCategoryColor(conversation.lastCategory).copy(alpha = 0.15f),
@@ -542,6 +557,14 @@ private fun ConversationCard(
                                 onDismissRequest = { showMenu = false }
                             ) {
                                 DropdownMenuItem(
+                                    text = { Text("Why was this filtered?") },
+                                    leadingIcon = { Icon(Icons.Default.Search, null) },
+                                    onClick = {
+                                        showMenu = false
+                                        showDecision = true
+                                    }
+                                )
+                                DropdownMenuItem(
                                     text = { Text("Open in SMS app") },
                                     leadingIcon = { Icon(Icons.Default.OpenInNew, null) },
                                     onClick = {
@@ -563,8 +586,33 @@ private fun ConversationCard(
                         }
                     }
                 }
+
+                if (conversation.lastIsTest && conversation.lastDecisionSummary.isNotEmpty()) {
+                    Text(
+                        text = conversation.lastDecisionSummary,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = DesignColors.Secondary,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
             }
         }
+    }
+
+    if (showDecision) {
+        DecisionTraceDialog(
+            sender = conversation.sender,
+            body = conversation.lastMessage,
+            category = conversation.lastCategory,
+            isTest = conversation.lastIsTest,
+            isBlocked = conversation.hasBlocked,
+            summary = conversation.lastDecisionSummary,
+            traceJson = conversation.lastDecisionTrace,
+            contextNote = "This is the latest message in the conversation. The blocked badge covers " +
+                "the whole thread, so an earlier message may be the blocked one.",
+            onDismiss = { showDecision = false }
+        )
     }
 }
 
@@ -575,6 +623,7 @@ private fun MessageCard(
     onAllowSender: () -> Unit
 ) {
     var showMenu by remember { mutableStateOf(false) }
+    var showDecision by remember { mutableStateOf(false) }
     
     Card(
         modifier = Modifier
@@ -639,6 +688,20 @@ private fun MessageCard(
                     horizontalArrangement = Arrangement.spacedBy(DesignSpacing.XS),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
+                    if (message.isTestMode) {
+                        Surface(
+                            color = MaterialTheme.colorScheme.secondaryContainer,
+                            shape = RoundedCornerShape(12.dp)
+                        ) {
+                            Text(
+                                text = "TEST",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSecondaryContainer,
+                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 4.dp)
+                            )
+                        }
+                    }
+
                     // Category badge
                     Surface(
                         color = getCategoryColor(message.category).copy(alpha = 0.15f),
@@ -671,6 +734,14 @@ private fun MessageCard(
                             onDismissRequest = { showMenu = false }
                         ) {
                             DropdownMenuItem(
+                                text = { Text("Why was this filtered?") },
+                                leadingIcon = { Icon(Icons.Default.Search, null) },
+                                onClick = {
+                                    showMenu = false
+                                    showDecision = true
+                                }
+                            )
+                            DropdownMenuItem(
                                 text = { Text("Open in SMS app") },
                                 leadingIcon = { Icon(Icons.Default.OpenInNew, null) },
                                 onClick = {
@@ -701,6 +772,14 @@ private fun MessageCard(
                 maxLines = 2,
                 overflow = TextOverflow.Ellipsis
             )
+
+            if (message.isTestMode && message.decisionSummary.isNotEmpty()) {
+                Text(
+                    text = message.decisionSummary,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = DesignColors.Secondary
+                )
+            }
             
             // Footer row
             Row(
@@ -733,6 +812,19 @@ private fun MessageCard(
                 }
             }
         }
+    }
+
+    if (showDecision) {
+        DecisionTraceDialog(
+            sender = message.sender,
+            body = message.messageBody,
+            category = message.category,
+            isTest = message.isTestMode,
+            isBlocked = message.isBlocked,
+            summary = message.decisionSummary,
+            traceJson = message.decisionTrace,
+            onDismiss = { showDecision = false }
+        )
     }
 }
 

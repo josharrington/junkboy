@@ -3,6 +3,7 @@ package com.ovehbe.junkboy.utils
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
+import android.os.Build
 import android.content.Context
 import android.content.Intent
 import android.Manifest
@@ -221,6 +222,8 @@ class NotificationHelper(private val context: Context) {
     }
     
     private fun createNotificationChannels() {
+        // Notification channels only exist on Android 8.0+; minSdk is 24.
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
         val notificationManager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         
         // Blocked messages channel (minimal priority)

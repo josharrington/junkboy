@@ -13,8 +13,8 @@ android {
         applicationId "com.ovehbe.junkboy"
         minSdk 24
         targetSdk 34
-        versionCode 3
-        versionName "1.3.0"
+        versionCode 12
+        versionName "1.4.8-review-fixes"
 
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables {
@@ -127,6 +127,9 @@ dependencies {
     
     // JSON parsing
     implementation 'com.google.code.gson:gson:2.10.1'
+
+    // YAML import/export for pipelines (SafeConstructor: no arbitrary object tags)
+    implementation 'org.yaml:snakeyaml:2.2'
     
     // Permissions
     implementation 'androidx.activity:activity-ktx:1.8.2'

@@ -4,9 +4,8 @@ import android.content.Context
 import android.content.SharedPreferences
 import com.ovehbe.junkboy.database.MessageCategory
 import com.ovehbe.junkboy.filters.AllowRule
-import com.ovehbe.junkboy.llm.ModelKind
-import com.ovehbe.junkboy.llm.OpenRouterDecisionsJudge
-import com.ovehbe.junkboy.llm.OpenRouterJudges
+import com.ovehbe.junkboy.pipeline.Pipeline
+import com.ovehbe.junkboy.pipeline.PipelineDefaults
 import com.google.gson.Gson
 import com.google.gson.reflect.TypeToken
 
@@ -31,12 +30,6 @@ class PreferencesManager(context: Context) {
         private const val KEY_NOTIFY_NOTIFICATION = "notify_notification"
         private const val KEY_NOTIFY_TRANSACTION = "notify_transaction"
         private const val KEY_NOTIFY_ALLOWED = "notify_allowed"
-        
-        // OpenRouter second opinion (the key lives only in this prefs file, which is excluded from backups)
-        private const val KEY_OPENROUTER_API_KEY = "openrouter_api_key"
-        private const val KEY_OPENROUTER_MODEL = "openrouter_model"
-        private const val KEY_OPENROUTER_MODEL_KIND = "openrouter_model_kind"
-        private const val KEY_DECISION_CUT = "openrouter_decision_cut"
         
         // Content allowlist (words/regexes that bypass all filtering)
         private const val KEY_CONTENT_ALLOW_RULES = "content_allow_rules"
@@ -69,6 +62,18 @@ class PreferencesManager(context: Context) {
         private const val KEY_AUTO_REPLY_STOP_ENABLED = "auto_reply_stop_enabled"
         // "_v2": the first version defaulted to off, which was unsafe; ignore any value stored under it
         private const val KEY_AUTO_REPLY_REQUIRE_SPAM = "auto_reply_require_spam_v2"
+
+        // The message pipeline (JSON). Replaces the individual filter/reply toggles going forward.
+        private const val KEY_PIPELINE = "message_pipeline"
+        private const val KEY_PIPELINE_MIGRATED = "message_pipeline_migrated"
+
+        // Enforcing performs pipeline actions; testing only records what would happen.
+        private const val KEY_ENFORCEMENT_ENABLED = "pipeline_enforcement_enabled"
+        // Auto-pause rules that used to fire but have not fired for 90 days.
+        private const val KEY_AUTO_PAUSE_STALE = "pipeline_auto_pause_stale"
+        // Local data lifecycle
+        private const val KEY_RETENTION_DAYS = "message_retention_days"
+        private const val KEY_BACKUP_ENABLED = "pipeline_backup_enabled"
         
         // Hub configuration
         private const val KEY_HUB_ENABLED = "hub_enabled"
@@ -161,25 +166,6 @@ class PreferencesManager(context: Context) {
         current.remove(keyword)
         setCustomKeywords(current)
     }
-    
-    // OpenRouter second opinion: blank key means the feature is off
-    fun getOpenRouterApiKey(): String = prefs.getString(KEY_OPENROUTER_API_KEY, "").orEmpty()
-    fun setOpenRouterApiKey(key: String) = prefs.edit().putString(KEY_OPENROUTER_API_KEY, key.trim()).apply()
-    
-    private fun resolvedOpenRouterModel() = OpenRouterJudges.resolve(
-        prefs.getString(KEY_OPENROUTER_MODEL, null),
-        prefs.getString(KEY_OPENROUTER_MODEL_KIND, null)
-    )
-    fun getOpenRouterModel(): String = resolvedOpenRouterModel().first
-    fun getOpenRouterModelKind(): ModelKind = resolvedOpenRouterModel().second
-    fun setOpenRouterModel(model: String, kind: ModelKind) = prefs.edit()
-        .putString(KEY_OPENROUTER_MODEL, model.trim())
-        .putString(KEY_OPENROUTER_MODEL_KIND, kind.stored)
-        .apply()
-    
-    // How far the spam score must exceed the wanted score for a decision model to call a text spam
-    fun getDecisionCut(): Float = prefs.getFloat(KEY_DECISION_CUT, OpenRouterDecisionsJudge.DEFAULT_CUT.toFloat())
-    fun setDecisionCut(cut: Float) = prefs.edit().putFloat(KEY_DECISION_CUT, cut).apply()
     
     // Content allowlist
     fun getAllowRules(): List<AllowRule> {
@@ -305,6 +291,50 @@ class PreferencesManager(context: Context) {
     fun isAutoReplyRequireSpam(): Boolean = prefs.getBoolean(KEY_AUTO_REPLY_REQUIRE_SPAM, true)
     fun setAutoReplyRequireSpam(enabled: Boolean) = prefs.edit().putBoolean(KEY_AUTO_REPLY_REQUIRE_SPAM, enabled).apply()
     
+    // Message pipeline
+    fun getPipeline(): Pipeline {
+        val json = prefs.getString(KEY_PIPELINE, null)
+        if (json != null) {
+            return try {
+                gson.fromJson(json, Pipeline::class.java) ?: PipelineDefaults.default()
+            } catch (e: Exception) {
+                PipelineDefaults.default()
+            }
+        }
+        // First read on an install that predates the pipeline: carry the old Stop2End toggle over
+        // as a step, then remember that the migration ran so later resets are not undone.
+        val migrated = prefs.getBoolean(KEY_PIPELINE_MIGRATED, false)
+        val pipeline = if (migrated) PipelineDefaults.default() else {
+            val built = PipelineDefaults.default(legacyStop2End = isAutoReplyStopEnabled())
+            prefs.edit().putBoolean(KEY_PIPELINE_MIGRATED, true).apply()
+            built
+        }
+        setPipeline(pipeline)
+        return pipeline
+    }
+
+    fun setPipeline(pipeline: Pipeline) =
+        prefs.edit().putString(KEY_PIPELINE, gson.toJson(pipeline)).apply()
+
+    fun resetPipeline() = setPipeline(PipelineDefaults.default())
+
+    fun isEnforcementEnabled(): Boolean = prefs.getBoolean(KEY_ENFORCEMENT_ENABLED, true)
+    fun setEnforcementEnabled(enabled: Boolean) =
+        prefs.edit().putBoolean(KEY_ENFORCEMENT_ENABLED, enabled).apply()
+
+    fun isAutoPauseStaleEnabled(): Boolean = prefs.getBoolean(KEY_AUTO_PAUSE_STALE, false)
+    fun setAutoPauseStaleEnabled(enabled: Boolean) =
+        prefs.edit().putBoolean(KEY_AUTO_PAUSE_STALE, enabled).apply()
+
+    /** Days to keep messages in Junkboy's database; 0 means never delete. */
+    fun getMessageRetentionDays(): Int = prefs.getInt(KEY_RETENTION_DAYS, 60)
+    fun setMessageRetentionDays(days: Int) =
+        prefs.edit().putInt(KEY_RETENTION_DAYS, days).apply()
+
+    fun isBackupEnabled(): Boolean = prefs.getBoolean(KEY_BACKUP_ENABLED, true)
+    fun setBackupEnabled(enabled: Boolean) =
+        prefs.edit().putBoolean(KEY_BACKUP_ENABLED, enabled).apply()
+    
     // OTP Auto-Copy
     fun isOtpAutoCopyEnabled(): Boolean = prefs.getBoolean(KEY_OTP_AUTO_COPY_ENABLED, true)
     fun setOtpAutoCopyEnabled(enabled: Boolean) = prefs.edit().putBoolean(KEY_OTP_AUTO_COPY_ENABLED, enabled).apply()
@@ -423,8 +453,24 @@ class PreferencesManager(context: Context) {
     fun getKeyboardOffset(): Int = prefs.getInt(KEY_KEYBOARD_OFFSET, 0)
     fun setKeyboardOffset(offset: Int) = prefs.edit().putInt(KEY_KEYBOARD_OFFSET, offset).apply()
     
-    // Reset all data
-    fun clearAllData() {
-        prefs.edit().clear().apply()
+    /**
+     * Clears message-derived counters and statistics only. Configuration (pipeline, allow lists,
+     * keywords, mode, retention, backup) is deliberately preserved: "Clear messages" must not
+     * quietly reset the user's rules.
+     */
+    fun resetStatistics() {
+        prefs.edit()
+            .remove(KEY_TOTAL_MESSAGES_FILTERED)
+            .remove(KEY_TOTAL_MESSAGES_BLOCKED)
+            .remove(KEY_DAILY_STATS_DATE)
+            .remove(KEY_DAILY_GENERAL_COUNT)
+            .remove(KEY_DAILY_PROMOTION_COUNT)
+            .remove(KEY_DAILY_NOTIFICATION_COUNT)
+            .remove(KEY_DAILY_TRANSACTION_COUNT)
+            .remove(KEY_DAILY_JUNK_COUNT)
+            .remove(KEY_DAILY_ALLOWED_COUNT)
+            .remove(KEY_DAILY_BLOCKED_COUNT)
+            .remove(KEY_OTP_COPY_COUNT)
+            .apply()
     }
 } 

@@ -17,7 +17,17 @@ data class FilteredMessage(
     val filterType: FilterType,
     val isBlocked: Boolean = false,
     val isUserOverride: Boolean = false,
-    val isRead: Boolean = false
+    val isRead: Boolean = false,
+    /** True when the pipeline ran in testing mode: [isBlocked] is false and nothing was performed. */
+    val isTestMode: Boolean = false,
+    /** What the pipeline would have done, e.g. "Would block (Block junk) · would reply STOP". */
+    val decisionSummary: String = "",
+    /** JSON trace of every step, check and action, for the "why was this filtered?" dialog. */
+    val decisionTrace: String = "",
+    /** The step that blocked, or replied when nothing blocked, used for per-rule analytics. */
+    val decisionStep: String = "",
+    /** The step that asked for a STOP reply, even when a later step also blocked. */
+    val decisionReplyStep: String = ""
 )
 
 enum class MessageCategory {

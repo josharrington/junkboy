@@ -48,7 +48,9 @@ class SmsReceiver : BroadcastReceiver() {
                 // Quick junk detection for immediate blocking
                 var shouldBlockBroadcast = false
                 val matchesAllowRule = ContentAllowlist.firstMatch(preferencesManager.getAllowRules(), fullMessageBody) != null
-                if (!matchesAllowRule && isObviousJunk(fullMessageBody, preferencesManager)) {
+                // Testing mode must not suppress delivery, so the receiver only aborts in enforcing mode.
+                if (!matchesAllowRule && isObviousJunk(fullMessageBody, preferencesManager) &&
+                    preferencesManager.isEnforcementEnabled()) {
                     Log.d(TAG, "Blocking obvious junk message from $sender")
                     shouldBlockBroadcast = true
                 }
@@ -61,8 +63,13 @@ class SmsReceiver : BroadcastReceiver() {
                     putExtra("is_obvious_junk", shouldBlockBroadcast)
                 }
                 
-                // Start as foreground service for reliable processing
-                context.startForegroundService(serviceIntent)
+                // Start as foreground service for reliable processing. On API 24-25 there is no
+                // startForegroundService, so use the ordinary service start.
+                if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+                    context.startForegroundService(serviceIntent)
+                } else {
+                    context.startService(serviceIntent)
+                }
                 
                 // Block the broadcast to prevent other apps from receiving obvious junk
                 if (shouldBlockBroadcast) {

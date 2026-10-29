@@ -21,6 +21,11 @@ class AutoReplyEngineTest {
             rows.filter { it.senderNumber == senderNumber }.maxOfOrNull { it.repliedAt }
         override fun getRecent(): Flow<List<AutoReplyLog>> = flowOf(rows.reversed())
         override suspend fun clear() = rows.clear()
+        override suspend fun deleteRepliesOlderThan(before: Long): Int {
+            val beforeSize = rows.size
+            rows.removeAll { it.repliedAt < before }
+            return beforeSize - rows.size
+        }
     }
 
     private val dao = FakeDao()

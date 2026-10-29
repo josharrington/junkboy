@@ -2,6 +2,7 @@ package com.ovehbe.junkboy.service
 
 import android.app.*
 import android.content.Context
+import android.os.Build
 import android.content.Intent
 import android.os.IBinder
 import android.util.Log
@@ -15,8 +16,11 @@ import com.ovehbe.junkboy.filters.ContentAllowlist
 import com.ovehbe.junkboy.filters.CustomFilter
 import com.ovehbe.junkboy.filters.FilterResult
 import com.ovehbe.junkboy.filters.Stop2EndDetector
-import com.ovehbe.junkboy.filters.Stop2EndPolicy
-import com.ovehbe.junkboy.llm.OpenRouterJudges
+import com.ovehbe.junkboy.pipeline.DecisionTraceCodec
+import com.ovehbe.junkboy.pipeline.ExecutionPlan
+import com.ovehbe.junkboy.pipeline.MessageContext
+import com.ovehbe.junkboy.pipeline.PipelineRunner
+import com.ovehbe.junkboy.pipeline.decisionSummary
 import com.ovehbe.junkboy.utils.AutoReplyEngine
 import com.ovehbe.junkboy.utils.SenderHistoryChecker
 import com.ovehbe.junkboy.utils.PreferencesManager
@@ -28,6 +32,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 import java.util.*
+import java.util.concurrent.atomic.AtomicInteger
 
 class SmsFilterService : Service() {
     
@@ -37,6 +42,7 @@ class SmsFilterService : Service() {
         private const val CHANNEL_ID = "sms_filter_service"
     }
     
+    private val activeMessages = AtomicInteger(0)
     private val serviceScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private lateinit var database: AppDatabase
     private lateinit var preferencesManager: PreferencesManager
@@ -90,50 +96,17 @@ class SmsFilterService : Service() {
         val message = intent.getStringExtra("message") ?: return
         val timestamp = intent.getLongExtra("timestamp", System.currentTimeMillis())
         val isObviousJunk = intent.getBooleanExtra("is_obvious_junk", false)
-        
+
+        activeMessages.incrementAndGet()
         serviceScope.launch {
             try {
                 Log.d(TAG, "Processing SMS from $sender")
                 
-                // Check if sender is in allowed list - if so, don't filter
-                // Use flexible matching: case-insensitive for text senders, and normalized for phone numbers
+                // Allow-list facts. The decision itself lives in the pipeline ("Allow list" step),
+                // so allow-listed messages still get classified and still appear in the test trace.
                 val allowedBySender = isAllowedSenderFlexible(sender)
                 val allowRule = if (allowedBySender) null else ContentAllowlist.firstMatch(preferencesManager.getAllowRules(), message)
-                if (allowedBySender || allowRule != null) {
-                    Log.d(TAG, if (allowedBySender) "Sender $sender is in allowed list, skipping filtering"
-                        else "Message from $sender matches allow rule '${allowRule?.pattern}', skipping filtering")
-                    
-                    // Create record but don't block - use ALLOWED category
-                    val filteredMessage = FilteredMessage(
-                        sender = sender,
-                        messageBody = message,
-                        receivedAt = Date(timestamp),
-                        category = MessageCategory.ALLOWED,
-                        confidence = 1.0f,
-                        filterType = if (allowedBySender) com.ovehbe.junkboy.database.FilterType.ALLOWED_SENDER
-                            else com.ovehbe.junkboy.database.FilterType.ALLOWED_CONTENT,
-                        isBlocked = false,
-                        isUserOverride = true, // Mark as user override since it's manually allowed
-                        isRead = false
-                    )
-                    
-                    // Save to database and get message ID
-                    val messageId = database.filteredMessageDao().insertMessage(filteredMessage)
-                    
-                    // IMPORTANT: Show notification for allow-listed senders
-                    // They should bypass filtering but still show notifications
-                    notificationHelper.showSmsNotification(
-                        filteredMessage.copy(id = messageId),
-                        if (allowedBySender) "allowed_sender" else "allowed_content"
-                    )
-                    
-                    // Detect and copy OTP if present (works for allow-listed senders too)
-                    otpHelper.detectAndCopyOtp(message, "SMS")
-                    
-                    Log.d(TAG, "Showed notification for allow-listed sender: $sender")
-                    stopSelf()
-                    return@launch
-                }
+                val allowedByContent = allowRule != null
                 
                 // Get user preferences
                 val isUnderAttackMode = preferencesManager.isUnderAttackMode()
@@ -253,118 +226,118 @@ class SmsFilterService : Service() {
                     }
                 }
                 
-                // Stop2End: a closing "Reply STOP" directive marks marketing spam (stored silently);
-                // a "STOP2END" elsewhere only triggers the reply if the message is independently spam
-                val stop2End = evaluateStop2End(sender, message, filterResult)
-                val isStop2End = stop2End.action == Stop2EndPolicy.Action.SUPPRESS_AND_REPLY
-                if (isStop2End) {
-                    filterResult = filterResult.copy(
-                        isBlocked = true,
-                        category = if (filterResult.category == MessageCategory.JUNK) MessageCategory.JUNK else MessageCategory.PROMOTION
-                    )
+                // Run the user-editable pipeline. Classification above is evidence; the pipeline
+                // decides what happens. Steps run in order, Block ends the chain, end means allow.
+                val pipeline = preferencesManager.getPipeline()
+                val context = MessageContext(
+                    sender = sender,
+                    body = message,
+                    timestamp = timestamp,
+                    category = filterResult.category,
+                    isBlocked = filterResult.isBlocked,
+                    isContact = senderHistoryChecker.isContact(sender),
+                    hasOutboundHistory = senderHistoryChecker.hasOutboundHistory(sender),
+                    hasOtp = otpHelper.testOtpDetection(message) != null,
+                    hasOptOutDirective = Stop2EndDetector.detect(message) != Stop2EndDetector.Directive.NONE,
+                    allowedBySender = allowedBySender,
+                    allowedByContent = allowedByContent
+                )
+                val evaluation = PipelineRunner.evaluate(pipeline, context)
+                val enforcing = preferencesManager.isEnforcementEnabled()
+                val plan = ExecutionPlan.forMode(evaluation, enforcing)
+
+                val isAllowed = evaluation.category == MessageCategory.ALLOWED
+                val filterType = when {
+                    allowedBySender -> com.ovehbe.junkboy.database.FilterType.ALLOWED_SENDER
+                    allowedByContent -> com.ovehbe.junkboy.database.FilterType.ALLOWED_CONTENT
+                    else -> filterResult.filterType
                 }
-                
-                // Create filtered message record
+
                 val filteredMessage = FilteredMessage(
                     sender = sender,
                     messageBody = message,
                     receivedAt = Date(timestamp),
-                    category = filterResult.category,
+                    category = evaluation.category,
                     confidence = filterResult.confidence,
-                    filterType = filterResult.filterType,
-                    isBlocked = filterResult.isBlocked,
-                    isUserOverride = false,
-                    isRead = false
+                    filterType = filterType,
+                    isBlocked = plan.block,
+                    isUserOverride = isAllowed,
+                    isRead = false,
+                    isTestMode = !enforcing,
+                    decisionSummary = if (enforcing) "" else evaluation.decisionSummary(),
+                    decisionTrace = DecisionTraceCodec.encode(evaluation.trace),
+                    decisionStep = evaluation.blockedBy ?: evaluation.repliedBy ?: "",
+                    decisionReplyStep = evaluation.repliedBy ?: ""
                 )
-                
-                // Save to database
+
                 val messageId = database.filteredMessageDao().insertMessage(filteredMessage)
-                
-                Log.d(TAG, "Message classified as ${filterResult.category} (blocked: ${filterResult.isBlocked}, confidence: ${filterResult.confidence})")
-                
-                if (isStop2End) {
-                    Log.i(TAG, "Stop2End spam from $sender stored silently")
-                    autoReplyEngine.sendStopReply(sender, stop2End.reason)
-                } else {
-                    // Show notification - NotificationHelper now handles all category-specific logic
+
+                if (enforcing && plan.block) {
+                    evaluation.blockedBy?.let { database.stepActivityDao().recordHit(it, timestamp) }
+                }
+
+                Log.d(TAG, "Pipeline (${if (enforcing) "enforce" else "test"}): " +
+                    "category=${evaluation.category} blocked=${plan.block} " +
+                    "by=${evaluation.blockedBy ?: "-"} muted=${evaluation.muted} reply=${plan.replyStop}")
+
+                if (plan.notify) {
                     notificationHelper.showSmsNotification(
                         filteredMessage.copy(id = messageId),
-                        filterResult.matchedRule
+                        evaluation.blockedBy ?: evaluation.repliedBy ?: filterResult.matchedRule
                     )
-                    
-                    // Detect and copy OTP if present (works regardless of category)
+                }
+
+                // Testing mode performs no side effects, including clipboard writes.
+                if (enforcing && !plan.block) {
                     otpHelper.detectAndCopyOtp(message, "SMS")
-                    
-                    if (stop2End.action == Stop2EndPolicy.Action.REPLY_ONLY) {
-                        autoReplyEngine.sendStopReply(sender, stop2End.reason)
+                }
+
+                // Safety envelope: never reply to a contact, an OTP message, or an allow-listed sender,
+                // whatever the pipeline says. The per-sender cooldown lives in AutoReplyEngine.
+                if (plan.replyStop) {
+                    if (context.isContact || context.hasOtp || context.allowedBySender || context.allowedByContent) {
+                        Log.w(TAG, "Refusing STOP reply: safety guard (contact/OTP/allowed)")
+                    } else {
+                        val sent = autoReplyEngine.sendStopReply(sender, "pipeline: ${evaluation.repliedBy}")
+                        if (sent && enforcing) {
+                            evaluation.repliedBy?.let { database.stepActivityDao().recordHit(it, timestamp) }
+                        }
                     }
                 }
-                
-                // Auto-delete junk if enabled and app is default SMS app
-                if (filterResult.isBlocked && preferencesManager.isAutoDeleteJunkEnabled()) {
+
+                val shouldDelete = plan.delete ||
+                    (enforcing && evaluation.blocked && preferencesManager.isAutoDeleteJunkEnabled())
+                if (shouldDelete) {
                     try {
                         val deleted = smsDeleter.deleteJunkSms(sender, message, timestamp)
                         if (deleted) {
-                            Log.i(TAG, "Auto-deleted junk SMS from system database")
-                            // Archive the deleted message
+                            Log.i(TAG, "Deleted SMS from system database")
                             smsDeleter.archiveDeletedMessage(filteredMessage.copy(id = messageId))
                         }
                     } catch (e: Exception) {
                         Log.e(TAG, "Error during auto-delete", e)
                     }
                 }
-                
-                // Log the blocking action for obvious junk
+
                 if (isObviousJunk) {
-                    Log.i(TAG, "Successfully blocked obvious junk message from $sender - broadcast aborted")
+                    Log.i(
+                        TAG,
+                        if (plan.block) "Blocked obvious junk message from $sender"
+                        else "Obvious junk from $sender recorded only (${if (enforcing) "not blocked" else "testing mode"})"
+                    )
                 }
-                
-                // Update statistics
-                updateFilteringStats(filterResult.category, filterResult.isBlocked)
+
+                updateFilteringStats(evaluation.category, plan.block)
                 
             } catch (e: Exception) {
                 Log.e(TAG, "Error processing SMS", e)
             } finally {
-                // Stop service after processing
-                stopSelf()
+                // Another message may still be in flight; only stop when the last one finishes.
+                if (activeMessages.decrementAndGet() <= 0) {
+                    stopSelf()
+                }
             }
         }
-    }
-    
-    /**
-     * Stop2End pipeline: (1) known senders pass, (2) the message needs an opt-out directive and
-     * must not contain a code, (3) the spam decision: the classifier if it flagged the message,
-     * otherwise the OpenRouter second opinion if an API key is set. See [Stop2EndPolicy].
-     */
-    private suspend fun evaluateStop2End(sender: String, message: String, result: FilterResult): Stop2EndPolicy.Decision {
-        val none = Stop2EndPolicy.Decision(Stop2EndPolicy.Action.NONE, "")
-        if (!preferencesManager.isAutoReplyStopEnabled()) return none
-        
-        // 1. Contacts or anyone the user has texted (except numbers we only auto-replied to)
-        if (senderHistoryChecker.isContact(sender)) return none
-        val autoRepliedBefore = AutoReplyEngine.normalizeTarget(sender)
-            ?.let { database.autoReplyLogDao().getLastReplyAt(it) } != null
-        if (!autoRepliedBefore && senderHistoryChecker.hasOutboundHistory(sender)) return none
-        
-        // 2 and 3
-        val apiKey = preferencesManager.getOpenRouterApiKey()
-        return Stop2EndPolicy.decide(
-            directive = Stop2EndDetector.detect(message),
-            category = result.category,
-            flaggedAsSpam = result.isBlocked ||
-                result.category == MessageCategory.JUNK ||
-                result.category == MessageCategory.PROMOTION,
-            hasOtp = otpHelper.testOtpDetection(message) != null,
-            requireSpamClassification = preferencesManager.isAutoReplyRequireSpam(),
-            judge = if (apiKey.isBlank()) null else OpenRouterJudges.create(
-                apiKey,
-                preferencesManager.getOpenRouterModel(),
-                preferencesManager.getOpenRouterModelKind(),
-                preferencesManager.getDecisionCut().toDouble()
-            ),
-            sender = sender,
-            body = message
-        )
     }
     
     /**
@@ -444,6 +417,7 @@ class SmsFilterService : Service() {
     }
     
     private fun createNotificationChannel() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
         val channel = NotificationChannel(
             CHANNEL_ID,
             "SMS Filter Service",

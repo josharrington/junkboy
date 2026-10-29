@@ -4,6 +4,7 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.content.ClipData
 import android.content.ClipboardManager
+import android.os.Build
 import android.content.Context
 import android.util.Log
 import androidx.compose.material3.SnackbarDuration
@@ -519,6 +520,7 @@ class OtpHelper(private val context: Context) {
      * Create notification channel for OTP notifications
      */
     private fun createOtpNotificationChannel() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
         val channel = NotificationChannel(
             OTP_CHANNEL_ID,
             "OTP Notifications",

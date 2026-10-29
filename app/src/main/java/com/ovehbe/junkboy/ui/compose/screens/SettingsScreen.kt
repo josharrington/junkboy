@@ -9,6 +9,7 @@ import androidx.core.content.ContextCompat
 import java.text.DateFormat
 import java.util.Date
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -30,6 +31,9 @@ import com.ovehbe.junkboy.utils.PreferencesManager
 import com.ovehbe.junkboy.utils.SmsAppManager
 import com.ovehbe.junkboy.utils.SmsDeleter
 import com.ovehbe.junkboy.utils.CsvExporter
+import com.ovehbe.junkboy.pipeline.PipelineYaml
+import com.ovehbe.junkboy.work.PipelineBackup
+import com.ovehbe.junkboy.work.WorkScheduler
 import com.ovehbe.junkboy.service.NotificationListenerService
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -58,17 +62,6 @@ fun SettingsScreen() {
     var autoDeleteJunk by remember { mutableStateOf(false) }
     var autoDeleteStatus by remember { mutableStateOf("") }
     var otpAutoCopy by remember { mutableStateOf(true) }
-    var autoReplyStop by remember { mutableStateOf(false) }
-    var autoReplyRequireSpam by remember { mutableStateOf(true) }
-    val autoReplyLog by remember { database.autoReplyLogDao().getRecent() }.collectAsState(initial = emptyList())
-    val stopPermissionLauncher = rememberLauncherForActivityResult(
-        ActivityResultContracts.RequestMultiplePermissions()
-    ) { granted ->
-        // READ_CONTACTS is required so known contacts are never auto-replied to
-        val ok = granted[Manifest.permission.SEND_SMS] == true && granted[Manifest.permission.READ_CONTACTS] == true
-        autoReplyStop = ok
-        preferencesManager.setAutoReplyStopEnabled(ok)
-    }
     var hubNotifications by remember { mutableStateOf(true) }
     var enabledHubApps by remember { mutableStateOf<Set<String>>(emptySet()) }
     
@@ -111,6 +104,28 @@ fun SettingsScreen() {
     var showAddRegexDialog by remember { mutableStateOf(false) }
     var showAddAllowedSenderDialog by remember { mutableStateOf(false) }
     var showClearDataDialog by remember { mutableStateOf(false) }
+    var retentionDays by remember { mutableStateOf(60) }
+    var showRetentionDialog by remember { mutableStateOf(false) }
+    var backupEnabled by remember { mutableStateOf(true) }
+    var backupResult by remember { mutableStateOf<String?>(null) }
+    var pipelineExportResult by remember { mutableStateOf<String?>(null) }
+    val pipelineExportLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.CreateDocument("application/yaml")
+    ) { uri ->
+        if (uri != null) {
+            serviceScope.launch {
+                val ok = try {
+                    context.contentResolver.openOutputStream(uri)?.use { stream ->
+                        stream.write(PipelineYaml.export(preferencesManager.getPipeline()).toByteArray())
+                    } != null
+                } catch (e: Exception) {
+                    false
+                }
+                pipelineExportResult = if (ok) "Pipeline exported to the chosen file" else "Export failed"
+            }
+        }
+    }
+
     var isProcessingExistingMessages by remember { mutableStateOf(false) }
     var isExporting by remember { mutableStateOf(false) }
     var processingResult by remember { mutableStateOf<String?>(null) }
@@ -128,8 +143,8 @@ fun SettingsScreen() {
         autoDeleteJunk = preferencesManager.isAutoDeleteJunkEnabled()
         autoDeleteStatus = smsDeleter.getAutoDeleteStatus()
         otpAutoCopy = preferencesManager.isOtpAutoCopyEnabled()
-        autoReplyStop = preferencesManager.isAutoReplyStopEnabled()
-        autoReplyRequireSpam = preferencesManager.isAutoReplyRequireSpam()
+        retentionDays = preferencesManager.getMessageRetentionDays()
+        backupEnabled = preferencesManager.isBackupEnabled()
         hubNotifications = preferencesManager.isHubNotificationsEnabled()
         enabledHubApps = preferencesManager.getEnabledHubApps()
         
@@ -646,116 +661,6 @@ fun SettingsScreen() {
             }
         }
         
-        // Stop2End Auto-Responder Section
-        item {
-            SettingsSection(
-                title = "Stop2End Auto-Responder",
-                icon = Icons.Default.Send
-            ) {
-                ToggleSettingItem(
-                    title = "Auto-reply STOP to Marketing SMS",
-                    subtitle = "Reply \"STOP\" to promotional messages that ask you to",
-                    checked = autoReplyStop,
-                    onCheckedChange = { enabled ->
-                        if (!enabled) {
-                            autoReplyStop = false
-                            preferencesManager.setAutoReplyStopEnabled(false)
-                        } else {
-                            val missing = listOf(Manifest.permission.SEND_SMS, Manifest.permission.READ_CONTACTS).filter {
-                                ContextCompat.checkSelfPermission(context, it) != PackageManager.PERMISSION_GRANTED
-                            }
-                            if (missing.isEmpty()) {
-                                autoReplyStop = true
-                                preferencesManager.setAutoReplyStopEnabled(true)
-                            } else {
-                                stopPermissionLauncher.launch(missing.toTypedArray())
-                            }
-                        }
-                    }
-                )
-                
-                ToggleSettingItem(
-                    title = "Also require spam classification",
-                    subtitle = "Recommended. Pharmacies, banks and clinics also add opt-out text to real messages",
-                    checked = autoReplyRequireSpam,
-                    onCheckedChange = { enabled ->
-                        autoReplyRequireSpam = enabled
-                        preferencesManager.setAutoReplyRequireSpam(enabled)
-                    }
-                )
-                
-                Card(
-                    modifier = Modifier.fillMaxWidth(),
-                    colors = CardDefaults.cardColors(containerColor = DesignColors.InputBackground)
-                ) {
-                    Text(
-                        text = "Enabling this sends an outbound SMS from your carrier plan, which may incur charges. " +
-                            "Replies are only sent to messages that end with an explicit \"Reply STOP\" (or similar) " +
-                            "directive, from numbers that are not in your contacts and that you have never texted. " +
-                            "At most one reply per number every 24 hours.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = DesignColors.Secondary,
-                        modifier = Modifier.padding(DesignSpacing.SM)
-                    )
-                }
-                
-                OpenRouterJudgeItem(preferencesManager)
-                
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text(
-                        text = "Auto-reply log",
-                        style = MaterialTheme.typography.titleSmall,
-                        color = DesignColors.Primary
-                    )
-                    if (autoReplyLog.isNotEmpty()) {
-                        TextButton(onClick = { serviceScope.launch { database.autoReplyLogDao().clear() } }) {
-                            Text("Clear")
-                        }
-                    }
-                }
-                
-                if (autoReplyLog.isEmpty()) {
-                    Text(
-                        text = "No auto-replies sent yet",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = DesignColors.Secondary
-                    )
-                } else {
-                    autoReplyLog.take(20).forEach { entry ->
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween
-                        ) {
-                            Column {
-                                Text(
-                                    text = entry.senderNumber,
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    color = DesignColors.Primary
-                                )
-                                if (entry.reason.isNotEmpty()) {
-                                    Text(
-                                        text = entry.reason,
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = DesignColors.Secondary
-                                    )
-                                }
-                            }
-                            Text(
-                                text = DateFormat.getDateTimeInstance(DateFormat.SHORT, DateFormat.SHORT)
-                                    .format(Date(entry.repliedAt)),
-                                style = MaterialTheme.typography.bodySmall,
-                                color = DesignColors.Secondary
-                            )
-                        }
-                    }
-                }
-            }
-        }
-        
         // SMS App Notification Control Section (Buzzkill-like feature)
         item {
             SettingsSection(
@@ -1065,11 +970,76 @@ fun SettingsScreen() {
                 }
                 
                 ActionSettingItem(
-                    title = "Clear All Data",
-                    subtitle = "Remove all filtered messages",
+                    title = "Clear messages and stats",
+                    subtitle = "Keeps your pipeline, rules and settings",
                     icon = Icons.Default.Delete,
                     onClick = { showClearDataDialog = true },
                     isDestructive = true
+                )
+            }
+        }
+
+        // Message retention
+        item {
+            SettingsSection(
+                title = "Message Retention",
+                icon = Icons.Default.AutoDelete
+            ) {
+                ActionSettingItem(
+                    title = "Keep messages for",
+                    subtitle = retentionLabel(retentionDays),
+                    icon = Icons.Default.Schedule,
+                    onClick = { showRetentionDialog = true }
+                )
+                Text(
+                    "Junkboy deletes its own copy of messages older than this. Google Messages, " +
+                        "your carrier and any other SMS app are not affected.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = DesignColors.Secondary,
+                    modifier = Modifier.padding(horizontal = DesignSpacing.MD)
+                )
+            }
+        }
+
+        // Local backup
+        item {
+            SettingsSection(
+                title = "Snapshot & export",
+                icon = Icons.Default.Backup
+            ) {
+                ToggleSettingItem(
+                    title = "Daily local snapshot",
+                    subtitle = "Writes pipeline YAML and a settings snapshot once a day",
+                    checked = backupEnabled,
+                    onCheckedChange = {
+                        backupEnabled = it
+                        preferencesManager.setBackupEnabled(it)
+                    }
+                )
+                ActionSettingItem(
+                    title = "Save snapshot now",
+                    subtitle = backupResult ?: "Saved on this device under backups/",
+                    icon = Icons.Default.Save,
+                    onClick = {
+                        serviceScope.launch {
+                            backupResult = PipelineBackup.write(context)
+                                ?.let { "Saved ${it.name}" }
+                                ?: "Backup failed"
+                        }
+                    }
+                )
+                ActionSettingItem(
+                    title = "Export pipeline file",
+                    subtitle = pipelineExportResult ?: "Save pipeline YAML anywhere, e.g. Downloads or a synced folder",
+                    icon = Icons.Default.FileDownload,
+                    onClick = { pipelineExportLauncher.launch("junkboy-pipeline.yaml") }
+                )
+                Text(
+                    "Daily snapshots live in Android/data/com.ovehbe.junkboy/files/backups and are " +
+                        "removed when the app is uninstalled. Use Export for a durable copy. Nothing is uploaded.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = DesignColors.Secondary,
+                    modifier = Modifier.padding(horizontal = DesignSpacing.MD)
                 )
             }
         }
@@ -1140,6 +1110,19 @@ fun SettingsScreen() {
         )
     }
     
+    if (showRetentionDialog) {
+        RetentionDialog(
+            current = retentionDays,
+            onDismiss = { showRetentionDialog = false },
+            onPick = { days ->
+                retentionDays = days
+                preferencesManager.setMessageRetentionDays(days)
+                WorkScheduler.retentionNow(context)
+                showRetentionDialog = false
+            }
+        )
+    }
+
     if (showClearDataDialog) {
         ClearDataDialog(
             onDismiss = { showClearDataDialog = false },
@@ -1149,179 +1132,12 @@ fun SettingsScreen() {
                     database.filteredMessageDao().deleteAllMessages()
                     // Also delete chat messages
                     database.chatMessageDao().deleteAllChatMessages()
+                    database.stepActivityDao().clear()
                 }
-                // Reset ALL statistics too
-                preferencesManager.clearAllData()
+                // Reset statistics and lifetime rule activity, but keep configuration.
+                preferencesManager.resetStatistics()
                 showClearDataDialog = false
             }
-        )
-    }
-}
-
-@Composable
-private fun OpenRouterJudgeItem(preferencesManager: PreferencesManager) {
-    val scope = rememberCoroutineScope()
-    var apiKey by remember { mutableStateOf(preferencesManager.getOpenRouterApiKey()) }
-    var model by remember { mutableStateOf(preferencesManager.getOpenRouterModel()) }
-    var kind by remember { mutableStateOf(preferencesManager.getOpenRouterModelKind()) }
-    var cut by remember { mutableFloatStateOf(preferencesManager.getDecisionCut()) }
-    var testResult by remember { mutableStateOf<String?>(null) }
-    var testing by remember { mutableStateOf(false) }
-    
-    Column(verticalArrangement = Arrangement.spacedBy(DesignSpacing.SM)) {
-        Text(
-            text = "Second opinion (OpenRouter)",
-            style = MaterialTheme.typography.titleSmall,
-            color = DesignColors.Primary
-        )
-        Text(
-            text = "Optional. With an API key, messages that carry an opt-out directive, come from senders you " +
-                "have never texted and weren't already flagged as spam are sent to OpenRouter and the model " +
-                "provider to decide whether they are spam. Links, email addresses and long numbers are removed " +
-                "first; names are not. Leave the key empty to keep everything on this phone.",
-            style = MaterialTheme.typography.bodySmall,
-            color = DesignColors.Secondary
-        )
-        OutlinedTextField(
-            value = apiKey,
-            onValueChange = {
-                apiKey = it
-                preferencesManager.setOpenRouterApiKey(it)
-                testResult = null
-            },
-            label = { Text("OpenRouter API key") },
-            singleLine = true,
-            visualTransformation = androidx.compose.ui.text.input.PasswordVisualTransformation(),
-            modifier = Modifier.fillMaxWidth()
-        )
-        OpenRouterModelPicker(model, kind) { picked ->
-            model = picked.id
-            kind = picked.kind
-            preferencesManager.setOpenRouterModel(picked.id, picked.kind)
-            testResult = null
-        }
-        if (kind == com.ovehbe.junkboy.llm.ModelKind.DECISION) {
-            Text(
-                text = "Spam cut-off: ${String.format(java.util.Locale.US, "%.2f", cut)}",
-                style = MaterialTheme.typography.bodyMedium,
-                color = DesignColors.Primary
-            )
-            Slider(
-                value = cut,
-                onValueChange = { cut = it; testResult = null },
-                onValueChangeFinished = { preferencesManager.setDecisionCut(cut) },
-                valueRange = 0.3f..0.95f
-            )
-            Text(
-                text = "Decision models score each message. A text counts as spam when its spam score beats its " +
-                    "wanted score by at least this much. Higher is more cautious: fewer wanted texts are blocked, " +
-                    "but more spam gets through. 0.70 worked well in testing.",
-                style = MaterialTheme.typography.bodySmall,
-                color = DesignColors.Secondary
-            )
-        }
-        Row(
-            horizontalArrangement = Arrangement.spacedBy(DesignSpacing.SM),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            TextButton(
-                enabled = apiKey.isNotBlank() && !testing,
-                onClick = {
-                    testing = true
-                    scope.launch {
-                        val start = System.currentTimeMillis()
-                        testResult = try {
-                            // Hard-coded sample, so no real message is sent by the test
-                            val result = com.ovehbe.junkboy.llm.OpenRouterJudges
-                                .create(apiKey.trim(), model, kind, cut.toDouble())
-                                .judgeOrThrow("12345", "Chip in $5 to help us flip the Senate before midnight! STOP2END")
-                            val detail = if (result.detail.isNotEmpty()) " (${result.detail})" else ""
-                            "Works: sample fundraising text judged ${result.verdict}$detail in ${System.currentTimeMillis() - start} ms"
-                        } catch (e: Exception) {
-                            "Failed: ${e.message}"
-                        }
-                        testing = false
-                    }
-                }
-            ) { Text("Test") }
-            if (testing) CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
-        }
-        Text(
-            text = testResult ?: if (apiKey.isBlank()) "Off: no API key" else "On",
-            style = MaterialTheme.typography.bodySmall,
-            color = DesignColors.Secondary
-        )
-    }
-}
-
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-private fun OpenRouterModelPicker(
-    model: String,
-    kind: com.ovehbe.junkboy.llm.ModelKind,
-    onPick: (com.ovehbe.junkboy.llm.OpenRouterModel) -> Unit
-) {
-    var models by remember { mutableStateOf<List<com.ovehbe.junkboy.llm.OpenRouterModel>>(emptyList()) }
-    var loadError by remember { mutableStateOf<String?>(null) }
-    var expanded by remember { mutableStateOf(false) }
-    
-    LaunchedEffect(Unit) {
-        try {
-            // Decision models first (a short list), then chat models, each sorted by id
-            models = com.ovehbe.junkboy.llm.OpenRouterModels.load()
-                .sortedWith(compareBy({ it.kind != com.ovehbe.junkboy.llm.ModelKind.DECISION }, { it.id }))
-        } catch (e: Exception) {
-            loadError = "Couldn't load the model list (${e.message})"
-        }
-    }
-    
-    val selected = models.firstOrNull { it.id == model }
-    
-    Column(verticalArrangement = Arrangement.spacedBy(DesignSpacing.XS)) {
-        ExposedDropdownMenuBox(
-            expanded = expanded && models.isNotEmpty(),
-            onExpandedChange = { expanded = it }
-        ) {
-            OutlinedTextField(
-                value = model,
-                onValueChange = {},
-                readOnly = true,
-                label = { Text("Model (${kind.label.lowercase()})") },
-                singleLine = true,
-                trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
-                modifier = Modifier.menuAnchor().fillMaxWidth()
-            )
-            ExposedDropdownMenu(
-                expanded = expanded && models.isNotEmpty(),
-                onDismissRequest = { expanded = false }
-            ) {
-                models.forEach { m ->
-                    DropdownMenuItem(
-                        text = {
-                            Column {
-                                Text(m.name, style = MaterialTheme.typography.bodyMedium)
-                                Text(
-                                    "${m.kind.label} · ${m.id} · ${m.priceLabel}",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = DesignColors.Secondary
-                                )
-                            }
-                        },
-                        onClick = {
-                            expanded = false
-                            onPick(m)
-                        }
-                    )
-                }
-            }
-        }
-        Text(
-            text = selected?.let {
-                "${it.kind.label} model · ${it.priceLabel} · about ${com.ovehbe.junkboy.llm.formatMoney(it.costPer1000Messages)} per 1,000 messages"
-            } ?: loadError ?: (if (models.isEmpty()) "Loading models…"
-            else "${models.size} models, decision and chat. Tap the field to choose one"),
-            style = MaterialTheme.typography.bodySmall,
-            color = DesignColors.Secondary
         )
     }
 }
@@ -1823,8 +1639,8 @@ private fun ClearDataDialog(
 ) {
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("Clear All Data") },
-        text = { Text("This will permanently delete all filtered messages. This action cannot be undone.") },
+        title = { Text("Clear messages and stats?") },
+        text = { Text("This permanently deletes stored messages, test decisions, statistics and per-rule hit counts. Your pipeline, allow lists, keywords and settings are kept. This cannot be undone.") },
         confirmButton = {
             TextButton(
                 onClick = onConfirm,
@@ -1853,3 +1669,44 @@ private fun getCategoryDisplayColor(category: com.ovehbe.junkboy.database.Messag
         com.ovehbe.junkboy.database.MessageCategory.ALLOWED -> DesignColors.AllowedMessage
     }
 } 
+
+private fun retentionLabel(days: Int): String = when (days) {
+    0 -> "Never delete"
+    30 -> "1 month"
+    60 -> "2 months (default)"
+    90 -> "3 months"
+    180 -> "6 months"
+    365 -> "1 year"
+    else -> "$days days"
+}
+
+@Composable
+private fun RetentionDialog(current: Int, onDismiss: () -> Unit, onPick: (Int) -> Unit) {
+    val options = listOf(30, 60, 90, 180, 365, 0)
+    var selected by remember { mutableStateOf(current) }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Keep messages for") },
+        text = {
+            Column {
+                options.forEach { days ->
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { selected = days }
+                            .padding(vertical = 6.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        RadioButton(selected = selected == days, onClick = { selected = days })
+                        Text(retentionLabel(days))
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = { onPick(selected) }) { Text("Save") }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } }
+    )
+}

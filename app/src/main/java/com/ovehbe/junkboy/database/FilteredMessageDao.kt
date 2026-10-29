@@ -14,7 +14,19 @@ data class SmsConversationSummary(
     val messageCount: Int,
     val unreadCount: Int,
     val lastCategory: MessageCategory,
-    val hasBlocked: Boolean
+    val hasBlocked: Boolean,
+    val lastIsTest: Boolean = false,
+    val lastDecisionSummary: String = "",
+    val lastDecisionTrace: String = ""
+)
+
+data class StepStats(
+    val step: String,
+    val hits: Int,
+    val testHits: Int,
+    val allowedAfter: Int,
+    val lastHit: Long?,
+    val lastEnforcedHit: Long?
 )
 
 @Dao
@@ -73,6 +85,42 @@ interface FilteredMessageDao {
     
     @Query("DELETE FROM filtered_messages WHERE receivedAt < :before")
     suspend fun deleteMessagesOlderThan(before: Date): Int
+
+    /**
+     * Looks for the same message within two minutes. The service's receive time and the provider's
+     * DATE can differ by a fraction of a second, so exact equality is not enough to spot a duplicate.
+     */
+    @Query("SELECT COUNT(*) FROM filtered_messages WHERE sender = :sender AND messageBody = :body " +
+        "AND receivedAt BETWEEN :receivedAt - 120000 AND :receivedAt + 120000")
+    suspend fun countMatchingMessage(sender: String, body: String, receivedAt: Long): Int
+
+    @Query("SELECT * FROM filtered_messages WHERE isTestMode = 1 ORDER BY receivedAt DESC")
+    fun getTestMessages(): Flow<List<FilteredMessage>>
+
+    @Query("DELETE FROM filtered_messages WHERE isTestMode = 1")
+    suspend fun deleteTestMessages(): Int
+
+    /**
+     * Counts each step that acted, not just the step that ended the message. A step that replies
+     * STOP is credited even when a later step blocks, because the reply is still performed.
+     */
+    @Query("""
+        SELECT step, COUNT(*) as hits,
+               SUM(CASE WHEN isTestMode = 1 THEN 1 ELSE 0 END) as testHits,
+               SUM(CASE WHEN category = 'ALLOWED' THEN 1 ELSE 0 END) as allowedAfter,
+               MAX(receivedAt) as lastHit,
+               MAX(CASE WHEN isTestMode = 0 THEN receivedAt END) as lastEnforcedHit
+        FROM (
+            SELECT decisionStep as step, isTestMode, category, receivedAt
+            FROM filtered_messages WHERE decisionStep != ''
+            UNION ALL
+            SELECT decisionReplyStep as step, isTestMode, category, receivedAt
+            FROM filtered_messages
+            WHERE decisionReplyStep != '' AND decisionReplyStep != decisionStep
+        )
+        GROUP BY step
+    """)
+    fun getStepStats(): Flow<List<StepStats>>
     
     @Query("DELETE FROM filtered_messages WHERE category = :category")
     suspend fun deleteMessagesByCategory(category: MessageCategory): Int
@@ -112,6 +160,9 @@ interface FilteredMessageDao {
             COUNT(*) as messageCount,
             SUM(CASE WHEN isRead = 0 THEN 1 ELSE 0 END) as unreadCount,
             (SELECT category FROM filtered_messages fm2 WHERE fm2.sender = fm.sender ORDER BY receivedAt DESC LIMIT 1) as lastCategory,
+            (SELECT isTestMode FROM filtered_messages fm2 WHERE fm2.sender = fm.sender ORDER BY receivedAt DESC LIMIT 1) as lastIsTest,
+            (SELECT decisionSummary FROM filtered_messages fm2 WHERE fm2.sender = fm.sender ORDER BY receivedAt DESC LIMIT 1) as lastDecisionSummary,
+            (SELECT decisionTrace FROM filtered_messages fm2 WHERE fm2.sender = fm.sender ORDER BY receivedAt DESC LIMIT 1) as lastDecisionTrace,
             MAX(CASE WHEN isBlocked = 1 THEN 1 ELSE 0 END) as hasBlocked
         FROM filtered_messages fm
         WHERE isBlocked = 0
@@ -131,6 +182,9 @@ interface FilteredMessageDao {
             COUNT(*) as messageCount,
             SUM(CASE WHEN isRead = 0 THEN 1 ELSE 0 END) as unreadCount,
             (SELECT category FROM filtered_messages fm2 WHERE fm2.sender = fm.sender ORDER BY receivedAt DESC LIMIT 1) as lastCategory,
+            (SELECT isTestMode FROM filtered_messages fm2 WHERE fm2.sender = fm.sender ORDER BY receivedAt DESC LIMIT 1) as lastIsTest,
+            (SELECT decisionSummary FROM filtered_messages fm2 WHERE fm2.sender = fm.sender ORDER BY receivedAt DESC LIMIT 1) as lastDecisionSummary,
+            (SELECT decisionTrace FROM filtered_messages fm2 WHERE fm2.sender = fm.sender ORDER BY receivedAt DESC LIMIT 1) as lastDecisionTrace,
             MAX(CASE WHEN isBlocked = 1 THEN 1 ELSE 0 END) as hasBlocked
         FROM filtered_messages fm
         GROUP BY sender
@@ -149,6 +203,9 @@ interface FilteredMessageDao {
             COUNT(*) as messageCount,
             SUM(CASE WHEN isRead = 0 THEN 1 ELSE 0 END) as unreadCount,
             (SELECT category FROM filtered_messages fm2 WHERE fm2.sender = fm.sender ORDER BY receivedAt DESC LIMIT 1) as lastCategory,
+            (SELECT isTestMode FROM filtered_messages fm2 WHERE fm2.sender = fm.sender ORDER BY receivedAt DESC LIMIT 1) as lastIsTest,
+            (SELECT decisionSummary FROM filtered_messages fm2 WHERE fm2.sender = fm.sender ORDER BY receivedAt DESC LIMIT 1) as lastDecisionSummary,
+            (SELECT decisionTrace FROM filtered_messages fm2 WHERE fm2.sender = fm.sender ORDER BY receivedAt DESC LIMIT 1) as lastDecisionTrace,
             1 as hasBlocked
         FROM filtered_messages fm
         WHERE isBlocked = 1

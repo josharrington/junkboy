@@ -47,10 +47,11 @@ class AutoReplyEngine(
 
         fun create(context: Context): AutoReplyEngine {
             val appContext = context.applicationContext
-            val prefs = PreferencesManager(appContext)
             return AutoReplyEngine(
                 dao = AppDatabase.getDatabase(appContext).autoReplyLogDao(),
-                isEnabled = { prefs.isAutoReplyStopEnabled() },
+                // Opting in is the pipeline step itself. The old global Stop2End toggle is gone;
+                // gating on it would make every REPLY_STOP action silently do nothing.
+                isEnabled = { true },
                 hasSendPermission = {
                     ContextCompat.checkSelfPermission(appContext, Manifest.permission.SEND_SMS) ==
                         PackageManager.PERMISSION_GRANTED
