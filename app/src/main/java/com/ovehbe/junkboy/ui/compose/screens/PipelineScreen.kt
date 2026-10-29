@@ -24,6 +24,9 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalLifecycleOwner
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
 import androidx.compose.ui.text.font.FontWeight
@@ -47,7 +50,7 @@ import java.io.File
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun PipelineScreen(onOpenLab: () -> Unit = {}) {
+fun PipelineScreen(onOpenLab: () -> Unit = {}, onOpenSuggested: () -> Unit = {}) {
     val context = LocalContext.current
     val preferencesManager = remember { PreferencesManager(context) }
     var pipeline by remember { mutableStateOf(preferencesManager.getPipeline()) }
@@ -93,6 +96,18 @@ fun PipelineScreen(onOpenLab: () -> Unit = {}) {
         ActivityResultContracts.RequestPermission()
     ) { granted -> contactsGranted = granted }
     val replies by remember { database.autoReplyLogDao().getRecent() }.collectAsState(initial = emptyList())
+    val lifecycleOwner = LocalLifecycleOwner.current
+
+    // Refresh after returning from the suggestions screen (or any other editor).
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) {
+                pipeline = preferencesManager.getPipeline()
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
 
     fun save(next: Pipeline) {
         pipeline = next
@@ -300,10 +315,13 @@ fun PipelineScreen(onOpenLab: () -> Unit = {}) {
                     showImport = true
                 }) { Text("Import YAML") }
             }
-            OutlinedButton(
-                onClick = onOpenLab,
-                modifier = Modifier.padding(top = DesignSpacing.SM)
-            ) { Text("Run 20 sample messages") }
+            Row(
+                modifier = Modifier.padding(top = DesignSpacing.SM),
+                horizontalArrangement = Arrangement.spacedBy(DesignSpacing.SM)
+            ) {
+                OutlinedButton(onClick = onOpenLab) { Text("Run 20 sample messages") }
+                OutlinedButton(onClick = onOpenSuggested) { Text("Suggested rules") }
+            }
         }
 
         if (!contactsGranted) {

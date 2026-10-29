@@ -13,8 +13,8 @@ android {
         applicationId "com.ovehbe.junkboy"
         minSdk 24
         targetSdk 34
-        versionCode 8
-        versionName "1.4.4-sample-detail"
+        versionCode 9
+        versionName "1.4.5-suggested-rules"
 
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables {

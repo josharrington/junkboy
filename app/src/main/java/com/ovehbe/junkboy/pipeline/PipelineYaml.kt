@@ -96,6 +96,42 @@ object PipelineYaml {
         return Yaml(options).dump(root)
     }
 
+    /**
+     * Parses a single step template. Accepts either a step mapping (`name: ...`, as used by the
+     * suggestions screen) or a complete pipeline document with a `steps` list.
+     */
+    fun importStep(text: String): Step {
+        val trimmed = text.trim()
+        if (trimmed.isEmpty()) throw PipelineFormatException("The template is empty")
+        val isDocument = trimmed.lineSequence().any { it.trimStart().startsWith("steps:") }
+        val document = if (isDocument) trimmed else wrapStep(trimmed)
+        return import(document).steps.firstOrNull()
+            ?: throw PipelineFormatException("The template has no step")
+    }
+
+    private fun wrapStep(step: String): String {
+        val lines = step.lines()
+        val first = lines.firstOrNull { it.isNotBlank() }?.trimStart().orEmpty()
+        if (first.startsWith("-")) {
+            throw PipelineFormatException("A template must be a step mapping, not a list item")
+        }
+        val body = StringBuilder("version: 1\nsteps:\n")
+        var firstWritten = false
+        for (line in lines) {
+            if (line.isBlank()) {
+                body.append("\n")
+                continue
+            }
+            if (!firstWritten) {
+                body.append("  - ").append(line).append("\n")
+                firstWritten = true
+            } else {
+                body.append("    ").append(line).append("\n")
+            }
+        }
+        return body.toString()
+    }
+
     fun import(text: String): Pipeline {
         val parsed = try {
             Yaml(SafeConstructor(LoaderOptions())).load<Any?>(text)
