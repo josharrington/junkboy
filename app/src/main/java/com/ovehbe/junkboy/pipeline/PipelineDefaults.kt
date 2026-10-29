@@ -64,6 +64,7 @@ object PipelineDefaults {
             CheckSpec(type = CheckType.TEXT_MATCHES, rules = rules),
             CheckSpec(type = CheckType.IS_CONTACT, expected = false),
             CheckSpec(type = CheckType.HAS_OTP, expected = false),
+            CheckSpec(type = CheckType.HAS_OUTBOUND_HISTORY, expected = false),
             CheckSpec(type = CheckType.ALLOWED_SENDER, expected = false),
             CheckSpec(type = CheckType.ALLOWED_CONTENT, expected = false)
         ),

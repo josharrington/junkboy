@@ -194,7 +194,10 @@ fun JunkboyApp(
                         TestFilterScreen()
                     }
                     composable("pipeline") {
-                        PipelineScreen()
+                        PipelineScreen(onOpenLab = { navController.navigate("pipeline-lab") })
+                    }
+                    composable("pipeline-lab") {
+                        PipelineLabScreen()
                     }
                     composable("settings") {
                         SettingsScreen()

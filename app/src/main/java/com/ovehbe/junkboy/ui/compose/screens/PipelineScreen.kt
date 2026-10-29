@@ -47,7 +47,7 @@ import java.io.File
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun PipelineScreen() {
+fun PipelineScreen(onOpenLab: () -> Unit = {}) {
     val context = LocalContext.current
     val preferencesManager = remember { PreferencesManager(context) }
     var pipeline by remember { mutableStateOf(preferencesManager.getPipeline()) }
@@ -300,6 +300,10 @@ fun PipelineScreen() {
                     showImport = true
                 }) { Text("Import YAML") }
             }
+            OutlinedButton(
+                onClick = onOpenLab,
+                modifier = Modifier.padding(top = DesignSpacing.SM)
+            ) { Text("Run 20 sample messages") }
         }
 
         if (!contactsGranted) {
