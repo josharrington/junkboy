@@ -609,6 +609,8 @@ private fun ConversationCard(
             isBlocked = conversation.hasBlocked,
             summary = conversation.lastDecisionSummary,
             traceJson = conversation.lastDecisionTrace,
+            contextNote = "This is the latest message in the conversation. The blocked badge covers " +
+                "the whole thread, so an earlier message may be the blocked one.",
             onDismiss = { showDecision = false }
         )
     }

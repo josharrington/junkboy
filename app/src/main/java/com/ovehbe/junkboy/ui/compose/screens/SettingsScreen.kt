@@ -31,7 +31,9 @@ import com.ovehbe.junkboy.utils.PreferencesManager
 import com.ovehbe.junkboy.utils.SmsAppManager
 import com.ovehbe.junkboy.utils.SmsDeleter
 import com.ovehbe.junkboy.utils.CsvExporter
+import com.ovehbe.junkboy.pipeline.PipelineYaml
 import com.ovehbe.junkboy.work.PipelineBackup
+import com.ovehbe.junkboy.work.WorkScheduler
 import com.ovehbe.junkboy.service.NotificationListenerService
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -106,6 +108,24 @@ fun SettingsScreen() {
     var showRetentionDialog by remember { mutableStateOf(false) }
     var backupEnabled by remember { mutableStateOf(true) }
     var backupResult by remember { mutableStateOf<String?>(null) }
+    var pipelineExportResult by remember { mutableStateOf<String?>(null) }
+    val pipelineExportLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.CreateDocument("application/yaml")
+    ) { uri ->
+        if (uri != null) {
+            serviceScope.launch {
+                val ok = try {
+                    context.contentResolver.openOutputStream(uri)?.use { stream ->
+                        stream.write(PipelineYaml.export(preferencesManager.getPipeline()).toByteArray())
+                    } != null
+                } catch (e: Exception) {
+                    false
+                }
+                pipelineExportResult = if (ok) "Pipeline exported to the chosen file" else "Export failed"
+            }
+        }
+    }
+
     var isProcessingExistingMessages by remember { mutableStateOf(false) }
     var isExporting by remember { mutableStateOf(false) }
     var processingResult by remember { mutableStateOf<String?>(null) }
@@ -950,8 +970,8 @@ fun SettingsScreen() {
                 }
                 
                 ActionSettingItem(
-                    title = "Clear All Data",
-                    subtitle = "Remove all filtered messages",
+                    title = "Clear messages and stats",
+                    subtitle = "Keeps your pipeline, rules and settings",
                     icon = Icons.Default.Delete,
                     onClick = { showClearDataDialog = true },
                     isDestructive = true
@@ -984,12 +1004,12 @@ fun SettingsScreen() {
         // Local backup
         item {
             SettingsSection(
-                title = "Local Backup",
+                title = "Snapshot & export",
                 icon = Icons.Default.Backup
             ) {
                 ToggleSettingItem(
-                    title = "Daily backup",
-                    subtitle = "Writes pipeline.yaml and a settings snapshot once a day",
+                    title = "Daily local snapshot",
+                    subtitle = "Writes pipeline YAML and a settings snapshot once a day",
                     checked = backupEnabled,
                     onCheckedChange = {
                         backupEnabled = it
@@ -997,7 +1017,7 @@ fun SettingsScreen() {
                     }
                 )
                 ActionSettingItem(
-                    title = "Back up now",
+                    title = "Save snapshot now",
                     subtitle = backupResult ?: "Saved on this device under backups/",
                     icon = Icons.Default.Save,
                     onClick = {
@@ -1008,8 +1028,15 @@ fun SettingsScreen() {
                         }
                     }
                 )
+                ActionSettingItem(
+                    title = "Export pipeline file",
+                    subtitle = pipelineExportResult ?: "Save pipeline YAML anywhere, e.g. Downloads or a synced folder",
+                    icon = Icons.Default.FileDownload,
+                    onClick = { pipelineExportLauncher.launch("junkboy-pipeline.yaml") }
+                )
                 Text(
-                    "Files go to Android/data/com.ovehbe.junkboy/files/backups. Nothing is uploaded.",
+                    "Daily snapshots live in Android/data/com.ovehbe.junkboy/files/backups and are " +
+                        "removed when the app is uninstalled. Use Export for a durable copy. Nothing is uploaded.",
                     style = MaterialTheme.typography.bodySmall,
                     color = DesignColors.Secondary,
                     modifier = Modifier.padding(horizontal = DesignSpacing.MD)
@@ -1090,6 +1117,7 @@ fun SettingsScreen() {
             onPick = { days ->
                 retentionDays = days
                 preferencesManager.setMessageRetentionDays(days)
+                WorkScheduler.retentionNow(context)
                 showRetentionDialog = false
             }
         )
@@ -1104,179 +1132,12 @@ fun SettingsScreen() {
                     database.filteredMessageDao().deleteAllMessages()
                     // Also delete chat messages
                     database.chatMessageDao().deleteAllChatMessages()
+                    database.stepActivityDao().clear()
                 }
-                // Reset ALL statistics too
-                preferencesManager.clearAllData()
+                // Reset statistics and lifetime rule activity, but keep configuration.
+                preferencesManager.resetStatistics()
                 showClearDataDialog = false
             }
-        )
-    }
-}
-
-@Composable
-private fun OpenRouterJudgeItem(preferencesManager: PreferencesManager) {
-    val scope = rememberCoroutineScope()
-    var apiKey by remember { mutableStateOf(preferencesManager.getOpenRouterApiKey()) }
-    var model by remember { mutableStateOf(preferencesManager.getOpenRouterModel()) }
-    var kind by remember { mutableStateOf(preferencesManager.getOpenRouterModelKind()) }
-    var cut by remember { mutableFloatStateOf(preferencesManager.getDecisionCut()) }
-    var testResult by remember { mutableStateOf<String?>(null) }
-    var testing by remember { mutableStateOf(false) }
-    
-    Column(verticalArrangement = Arrangement.spacedBy(DesignSpacing.SM)) {
-        Text(
-            text = "Second opinion (OpenRouter)",
-            style = MaterialTheme.typography.titleSmall,
-            color = DesignColors.Primary
-        )
-        Text(
-            text = "Optional. With an API key, messages that carry an opt-out directive, come from senders you " +
-                "have never texted and weren't already flagged as spam are sent to OpenRouter and the model " +
-                "provider to decide whether they are spam. Links, email addresses and long numbers are removed " +
-                "first; names are not. Leave the key empty to keep everything on this phone.",
-            style = MaterialTheme.typography.bodySmall,
-            color = DesignColors.Secondary
-        )
-        OutlinedTextField(
-            value = apiKey,
-            onValueChange = {
-                apiKey = it
-                preferencesManager.setOpenRouterApiKey(it)
-                testResult = null
-            },
-            label = { Text("OpenRouter API key") },
-            singleLine = true,
-            visualTransformation = androidx.compose.ui.text.input.PasswordVisualTransformation(),
-            modifier = Modifier.fillMaxWidth()
-        )
-        OpenRouterModelPicker(model, kind) { picked ->
-            model = picked.id
-            kind = picked.kind
-            preferencesManager.setOpenRouterModel(picked.id, picked.kind)
-            testResult = null
-        }
-        if (kind == com.ovehbe.junkboy.llm.ModelKind.DECISION) {
-            Text(
-                text = "Spam cut-off: ${String.format(java.util.Locale.US, "%.2f", cut)}",
-                style = MaterialTheme.typography.bodyMedium,
-                color = DesignColors.Primary
-            )
-            Slider(
-                value = cut,
-                onValueChange = { cut = it; testResult = null },
-                onValueChangeFinished = { preferencesManager.setDecisionCut(cut) },
-                valueRange = 0.3f..0.95f
-            )
-            Text(
-                text = "Decision models score each message. A text counts as spam when its spam score beats its " +
-                    "wanted score by at least this much. Higher is more cautious: fewer wanted texts are blocked, " +
-                    "but more spam gets through. 0.70 worked well in testing.",
-                style = MaterialTheme.typography.bodySmall,
-                color = DesignColors.Secondary
-            )
-        }
-        Row(
-            horizontalArrangement = Arrangement.spacedBy(DesignSpacing.SM),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            TextButton(
-                enabled = apiKey.isNotBlank() && !testing,
-                onClick = {
-                    testing = true
-                    scope.launch {
-                        val start = System.currentTimeMillis()
-                        testResult = try {
-                            // Hard-coded sample, so no real message is sent by the test
-                            val result = com.ovehbe.junkboy.llm.OpenRouterJudges
-                                .create(apiKey.trim(), model, kind, cut.toDouble())
-                                .judgeOrThrow("12345", "Chip in $5 to help us flip the Senate before midnight! STOP2END")
-                            val detail = if (result.detail.isNotEmpty()) " (${result.detail})" else ""
-                            "Works: sample fundraising text judged ${result.verdict}$detail in ${System.currentTimeMillis() - start} ms"
-                        } catch (e: Exception) {
-                            "Failed: ${e.message}"
-                        }
-                        testing = false
-                    }
-                }
-            ) { Text("Test") }
-            if (testing) CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
-        }
-        Text(
-            text = testResult ?: if (apiKey.isBlank()) "Off: no API key" else "On",
-            style = MaterialTheme.typography.bodySmall,
-            color = DesignColors.Secondary
-        )
-    }
-}
-
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-private fun OpenRouterModelPicker(
-    model: String,
-    kind: com.ovehbe.junkboy.llm.ModelKind,
-    onPick: (com.ovehbe.junkboy.llm.OpenRouterModel) -> Unit
-) {
-    var models by remember { mutableStateOf<List<com.ovehbe.junkboy.llm.OpenRouterModel>>(emptyList()) }
-    var loadError by remember { mutableStateOf<String?>(null) }
-    var expanded by remember { mutableStateOf(false) }
-    
-    LaunchedEffect(Unit) {
-        try {
-            // Decision models first (a short list), then chat models, each sorted by id
-            models = com.ovehbe.junkboy.llm.OpenRouterModels.load()
-                .sortedWith(compareBy({ it.kind != com.ovehbe.junkboy.llm.ModelKind.DECISION }, { it.id }))
-        } catch (e: Exception) {
-            loadError = "Couldn't load the model list (${e.message})"
-        }
-    }
-    
-    val selected = models.firstOrNull { it.id == model }
-    
-    Column(verticalArrangement = Arrangement.spacedBy(DesignSpacing.XS)) {
-        ExposedDropdownMenuBox(
-            expanded = expanded && models.isNotEmpty(),
-            onExpandedChange = { expanded = it }
-        ) {
-            OutlinedTextField(
-                value = model,
-                onValueChange = {},
-                readOnly = true,
-                label = { Text("Model (${kind.label.lowercase()})") },
-                singleLine = true,
-                trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
-                modifier = Modifier.menuAnchor().fillMaxWidth()
-            )
-            ExposedDropdownMenu(
-                expanded = expanded && models.isNotEmpty(),
-                onDismissRequest = { expanded = false }
-            ) {
-                models.forEach { m ->
-                    DropdownMenuItem(
-                        text = {
-                            Column {
-                                Text(m.name, style = MaterialTheme.typography.bodyMedium)
-                                Text(
-                                    "${m.kind.label} · ${m.id} · ${m.priceLabel}",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = DesignColors.Secondary
-                                )
-                            }
-                        },
-                        onClick = {
-                            expanded = false
-                            onPick(m)
-                        }
-                    )
-                }
-            }
-        }
-        Text(
-            text = selected?.let {
-                "${it.kind.label} model · ${it.priceLabel} · about ${com.ovehbe.junkboy.llm.formatMoney(it.costPer1000Messages)} per 1,000 messages"
-            } ?: loadError ?: (if (models.isEmpty()) "Loading models…"
-            else "${models.size} models, decision and chat. Tap the field to choose one"),
-            style = MaterialTheme.typography.bodySmall,
-            color = DesignColors.Secondary
         )
     }
 }
@@ -1778,8 +1639,8 @@ private fun ClearDataDialog(
 ) {
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("Clear All Data") },
-        text = { Text("This will permanently delete all filtered messages. This action cannot be undone.") },
+        title = { Text("Clear messages and stats?") },
+        text = { Text("This permanently deletes stored messages, test decisions, statistics and per-rule hit counts. Your pipeline, allow lists, keywords and settings are kept. This cannot be undone.") },
         confirmButton = {
             TextButton(
                 onClick = onConfirm,

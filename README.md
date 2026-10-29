@@ -324,7 +324,7 @@ cd junkboy
 ### **Data Handling**
 - **Local Processing**: All SMS analysis happens on-device
 - **No Cloud Sync**: Messages never leave your device
-- **Encrypted Storage**: Local database uses Android's built-in encryption
+- **App-Private Storage**: The Room database is stored in the app's private directory. It is not separately encrypted; it relies on Android's per-app sandbox and device encryption. Backups and exports are written only where you choose.
 - **Minimal Permissions**: Only requests necessary permissions for functionality
 
 ### **Open Source**

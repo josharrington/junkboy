@@ -2,6 +2,7 @@ package com.ovehbe.junkboy.service
 
 import android.app.*
 import android.content.Context
+import android.os.Build
 import android.content.Intent
 import android.os.IBinder
 import android.util.Log
@@ -31,6 +32,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 import java.util.*
+import java.util.concurrent.atomic.AtomicInteger
 
 class SmsFilterService : Service() {
     
@@ -40,6 +42,7 @@ class SmsFilterService : Service() {
         private const val CHANNEL_ID = "sms_filter_service"
     }
     
+    private val activeMessages = AtomicInteger(0)
     private val serviceScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private lateinit var database: AppDatabase
     private lateinit var preferencesManager: PreferencesManager
@@ -93,7 +96,8 @@ class SmsFilterService : Service() {
         val message = intent.getStringExtra("message") ?: return
         val timestamp = intent.getLongExtra("timestamp", System.currentTimeMillis())
         val isObviousJunk = intent.getBooleanExtra("is_obvious_junk", false)
-        
+
+        activeMessages.incrementAndGet()
         serviceScope.launch {
             try {
                 Log.d(TAG, "Processing SMS from $sender")
@@ -262,10 +266,15 @@ class SmsFilterService : Service() {
                     isTestMode = !enforcing,
                     decisionSummary = if (enforcing) "" else evaluation.decisionSummary(),
                     decisionTrace = DecisionTraceCodec.encode(evaluation.trace),
-                    decisionStep = evaluation.blockedBy ?: evaluation.repliedBy ?: ""
+                    decisionStep = evaluation.blockedBy ?: evaluation.repliedBy ?: "",
+                    decisionReplyStep = evaluation.repliedBy ?: ""
                 )
 
                 val messageId = database.filteredMessageDao().insertMessage(filteredMessage)
+
+                if (enforcing && plan.block) {
+                    evaluation.blockedBy?.let { database.stepActivityDao().recordHit(it, timestamp) }
+                }
 
                 Log.d(TAG, "Pipeline (${if (enforcing) "enforce" else "test"}): " +
                     "category=${evaluation.category} blocked=${plan.block} " +
@@ -278,7 +287,8 @@ class SmsFilterService : Service() {
                     )
                 }
 
-                if (!plan.block) {
+                // Testing mode performs no side effects, including clipboard writes.
+                if (enforcing && !plan.block) {
                     otpHelper.detectAndCopyOtp(message, "SMS")
                 }
 
@@ -288,7 +298,10 @@ class SmsFilterService : Service() {
                     if (context.isContact || context.hasOtp || context.allowedBySender || context.allowedByContent) {
                         Log.w(TAG, "Refusing STOP reply: safety guard (contact/OTP/allowed)")
                     } else {
-                        autoReplyEngine.sendStopReply(sender, "pipeline: ${evaluation.repliedBy}")
+                        val sent = autoReplyEngine.sendStopReply(sender, "pipeline: ${evaluation.repliedBy}")
+                        if (sent && enforcing) {
+                            evaluation.repliedBy?.let { database.stepActivityDao().recordHit(it, timestamp) }
+                        }
                     }
                 }
 
@@ -307,7 +320,11 @@ class SmsFilterService : Service() {
                 }
 
                 if (isObviousJunk) {
-                    Log.i(TAG, "Successfully blocked obvious junk message from $sender - broadcast aborted")
+                    Log.i(
+                        TAG,
+                        if (plan.block) "Blocked obvious junk message from $sender"
+                        else "Obvious junk from $sender recorded only (${if (enforcing) "not blocked" else "testing mode"})"
+                    )
                 }
 
                 updateFilteringStats(evaluation.category, plan.block)
@@ -315,8 +332,10 @@ class SmsFilterService : Service() {
             } catch (e: Exception) {
                 Log.e(TAG, "Error processing SMS", e)
             } finally {
-                // Stop service after processing
-                stopSelf()
+                // Another message may still be in flight; only stop when the last one finishes.
+                if (activeMessages.decrementAndGet() <= 0) {
+                    stopSelf()
+                }
             }
         }
     }
@@ -398,6 +417,7 @@ class SmsFilterService : Service() {
     }
     
     private fun createNotificationChannel() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
         val channel = NotificationChannel(
             CHANNEL_ID,
             "SMS Filter Service",

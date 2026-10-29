@@ -110,7 +110,11 @@ object PipelineYaml {
     }
 
     private fun wrapStep(step: String): String {
-        val lines = step.lines()
+        // Drop YAML document markers so a copied file header does not become a list item.
+        val lines = step.lines().filterNot {
+            val t = it.trim()
+            t == "---" || t == "..."
+        }
         val first = lines.firstOrNull { it.isNotBlank() }?.trimStart().orEmpty()
         if (first.startsWith("-")) {
             throw PipelineFormatException("A template must be a step mapping, not a list item")
@@ -142,6 +146,16 @@ object PipelineYaml {
         val root = parsed as? Map<*, *>
             ?: throw PipelineFormatException("The document must be a mapping with a 'steps' list")
 
+        val unknownRootKeys = root.keys.map { it.toString() }.filterNot {
+            it in setOf("version", "steps", "name", "description")
+        }
+        if (unknownRootKeys.isNotEmpty()) {
+            throw PipelineFormatException(
+                "Unknown document key(s): ${unknownRootKeys.joinToString(", ")} " +
+                    "(expected version and steps)"
+            )
+        }
+
         val version = (root["version"] as? Number)?.toInt() ?: 1
         if (version != 1) throw PipelineFormatException("Unsupported version $version (expected 1)")
 
@@ -160,6 +174,16 @@ object PipelineYaml {
     private fun importStep(raw: Any?, index: Int): Step {
         val map = raw as? Map<*, *>
             ?: throw PipelineFormatException("Step ${index + 1} must be a mapping")
+        val unknownKeys = map.keys.map { it.toString() }.filterNot {
+            it in setOf("name", "enabled", "match", "checks", "actions")
+        }
+        if (unknownKeys.isNotEmpty()) {
+            throw PipelineFormatException(
+                "Step ${index + 1}: unknown key(s) ${unknownKeys.joinToString(", ")} " +
+                    "(expected name, enabled, match, checks, actions)"
+            )
+        }
+
         val name = string(map["name"])?.trim().orEmpty()
         if (name.isEmpty()) throw PipelineFormatException("Step ${index + 1} needs a name")
 

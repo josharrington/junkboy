@@ -100,9 +100,12 @@ fun PipelineLabScreen() {
             )
             Text(
                 "$blocked blocked, $replies would get a STOP reply, ${results.size - blocked} allowed. " +
-                    if (useModel) {
+                    if (useModel && !modelFailed) {
                         "Verdicts come from the bundled on-device classifier. Fixture expectations were " +
                             "written for the rule tier, so the score below compares the two."
+                    } else if (useModel) {
+                        "The classifier could not be initialized, so these are rule verdicts, not model " +
+                            "verdicts. Fixture expectations were written for the rule tier."
                     } else {
                         "Verdicts come from the built-in keyword and regex rules, so results are " +
                             "deterministic and repeatable."
@@ -178,7 +181,7 @@ fun PipelineLabScreen() {
         if (useReference) {
             item {
                 Text(
-                    if (useModel) {
+                    if (useModel && !modelFailed) {
                         "$matched of ${results.size} still match the rule-tier expectations"
                     } else {
                         "$matched of ${results.size} match the fixture's expectations"

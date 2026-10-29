@@ -4,6 +4,7 @@ import com.ovehbe.junkboy.database.MessageCategory
 import com.ovehbe.junkboy.filters.AllowRule
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -177,5 +178,52 @@ class PipelineYamlTest {
     fun `bare boolean check means true`() {
         val pipeline = PipelineYaml.import("steps:\n  - name: A\n    checks: [is_contact]\n    actions: [block]")
         assertTrue(pipeline.steps[0].checks[0].expected)
+    }
+}
+
+// --- review fixes: strict keys and document markers ---
+
+class PipelineYamlStrictnessTest {
+
+    @Test
+    fun `unknown step key is rejected with its name`() {
+        val yaml = """
+            version: 1
+            steps:
+              - name: Block junk
+                action:
+                  - block
+        """.trimIndent()
+
+        val error = assertThrows(PipelineFormatException::class.java) { PipelineYaml.import(yaml) }
+        assertTrue(error.message!!.contains("action"))
+    }
+
+    @Test
+    fun `unknown document key is rejected`() {
+        val yaml = """
+            version: 1
+            stepz: []
+            steps: []
+        """.trimIndent()
+
+        val error = assertThrows(PipelineFormatException::class.java) { PipelineYaml.import(yaml) }
+        assertTrue(error.message!!.contains("stepz"))
+    }
+
+    @Test
+    fun `a step template with a document marker still imports`() {
+        val template = """
+            ---
+            name: Block junk
+            checks:
+              - spam_verdict
+            actions:
+              - block
+        """.trimIndent()
+
+        val step = PipelineYaml.importStep(template)
+        assertEquals("Block junk", step.name)
+        assertEquals(listOf(ActionType.BLOCK), step.actions.map { it.type })
     }
 }

@@ -1,6 +1,8 @@
 @file:OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
 package com.ovehbe.junkboy.ui.compose.screens
 
+import android.Manifest
+import android.content.pm.PackageManager
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -12,6 +14,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.core.content.ContextCompat
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -34,6 +37,8 @@ fun TestDecisionsScreen() {
     val scope = rememberCoroutineScope()
     val messages by remember { database.filteredMessageDao().getTestMessages() }
         .collectAsState(initial = emptyList())
+    val contactsGranted = ContextCompat.checkSelfPermission(context, Manifest.permission.READ_CONTACTS) ==
+        PackageManager.PERMISSION_GRANTED
 
     var filter by remember { mutableStateOf(0) } // 0 all, 1 block, 2 reply
     var selected by remember { mutableStateOf<FilteredMessage?>(null) }
@@ -97,6 +102,20 @@ fun TestDecisionsScreen() {
                 color = DesignColors.Secondary,
                 modifier = Modifier.padding(top = DesignSpacing.XS)
             )
+        }
+
+        if (!contactsGranted && messages.any { wouldReply(it) }) {
+            item {
+                Card(colors = CardDefaults.cardColors(containerColor = DesignColors.InputBackground)) {
+                    Text(
+                        "Contacts permission is off, so every STOP reply recorded here would be refused " +
+                            "at send time. Grant contacts access on the Pipeline screen before enforcing.",
+                        modifier = Modifier.padding(DesignSpacing.MD),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error
+                    )
+                }
+            }
         }
 
         item {

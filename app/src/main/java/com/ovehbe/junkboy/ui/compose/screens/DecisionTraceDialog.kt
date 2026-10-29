@@ -28,6 +28,7 @@ fun DecisionTraceDialog(
     isBlocked: Boolean,
     summary: String,
     traceJson: String,
+    contextNote: String? = null,
     onDismiss: () -> Unit
 ) {
     val steps = remember(traceJson) { DecisionTraceCodec.decode(traceJson) }
@@ -44,6 +45,13 @@ fun DecisionTraceDialog(
             ) {
                 Text(sender, style = MaterialTheme.typography.labelSmall, color = DesignColors.Secondary)
                 Text(body, style = MaterialTheme.typography.bodyMedium)
+                if (contextNote != null) {
+                    Text(
+                        contextNote,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.error
+                    )
+                }
 
                 Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                     TraceChip(category.name.lowercase())

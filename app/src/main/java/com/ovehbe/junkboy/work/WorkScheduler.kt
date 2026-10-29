@@ -28,4 +28,9 @@ object WorkScheduler {
     fun backupNow(context: Context) {
         WorkManager.getInstance(context).enqueue(OneTimeWorkRequestBuilder<BackupWorker>().build())
     }
+
+    /** Apply a changed retention setting now instead of waiting for the next daily run. */
+    fun retentionNow(context: Context) {
+        WorkManager.getInstance(context).enqueue(OneTimeWorkRequestBuilder<RetentionWorker>().build())
+    }
 }

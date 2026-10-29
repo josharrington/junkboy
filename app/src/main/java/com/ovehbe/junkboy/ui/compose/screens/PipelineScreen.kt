@@ -99,6 +99,9 @@ fun PipelineScreen(
     val stepStats by remember { database.filteredMessageDao().getStepStats() }
         .collectAsState(initial = emptyList())
     val statsByStep = remember(stepStats) { stepStats.associateBy { it.step } }
+    val activity by remember { database.stepActivityDao().getAll() }
+        .collectAsState(initial = emptyList())
+    val activityByStep = remember(activity) { activity.associateBy { it.step } }
     val staleCutoff = System.currentTimeMillis() - 90L * 24 * 60 * 60 * 1000
 
     var contactsGranted by remember {
@@ -138,14 +141,18 @@ fun PipelineScreen(
         save(pipeline.copy(steps = steps))
     }
 
-    LaunchedEffect(stepStats, autoPause) {
-        if (!autoPause || stepStats.isEmpty()) return@LaunchedEffect
-        val staleNames = stepStats
-            .filter { it.hits > it.testHits && it.lastEnforcedHit != null && it.lastEnforcedHit < staleCutoff }
+    LaunchedEffect(activity, autoPause) {
+        if (!autoPause || activity.isEmpty()) return@LaunchedEffect
+        // Lifetime activity, not filtered_messages: retention may have deleted the messages.
+        val staleNames = activity
+            .filter { it.lastEnforcedHit < staleCutoff }
             .map { it.step }
             .toSet()
         val staleSteps = pipeline.steps.filter { it.enabled && it.name in staleNames }
-        if (staleSteps.isEmpty()) return@LaunchedEffect
+        if (staleSteps.isEmpty()) {
+            pausedNote = ""
+            return@LaunchedEffect
+        }
         val next = pipeline.copy(
             steps = pipeline.steps.map { step ->
                 if (step.enabled && step.name in staleNames) step.copy(enabled = false) else step
@@ -483,6 +490,7 @@ fun PipelineScreen(
                 index = index,
                 step = step,
                 stats = statsByStep[step.name],
+                lastEnforcedHit = activityByStep[step.name]?.lastEnforcedHit,
                 canMoveUp = index > 0,
                 canMoveDown = index < pipeline.steps.lastIndex,
                 onToggle = { enabled ->
@@ -580,6 +588,7 @@ private fun StepCard(
     index: Int,
     step: Step,
     stats: StepStats?,
+    lastEnforcedHit: Long?,
     canMoveUp: Boolean,
     canMoveDown: Boolean,
     onToggle: (Boolean) -> Unit,
@@ -609,9 +618,8 @@ private fun StepCard(
                 modifier = Modifier.padding(top = 2.dp)
             )
             val lastHit = stats?.lastHit
-            val stale = stats != null && stats.hits > stats.testHits &&
-                stats.lastEnforcedHit != null &&
-                stats.lastEnforcedHit < System.currentTimeMillis() - 90L * 24 * 60 * 60 * 1000
+            val stale = lastEnforcedHit != null &&
+                lastEnforcedHit < System.currentTimeMillis() - 90L * 24 * 60 * 60 * 1000
             Row(
                 modifier = Modifier.padding(top = 2.dp),
                 verticalAlignment = Alignment.CenterVertically

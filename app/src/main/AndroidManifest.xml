@@ -25,7 +25,6 @@
     <uses-permission android:name="android.permission.WAKE_LOCK" />
     
     <!-- Only used by the optional OpenRouter second opinion, and only when the user enters an API key -->
-    <uses-permission android:name="android.permission.INTERNET" />
     
     <!-- Notification listener permission for chat notifications -->
     <uses-permission android:name="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE" />

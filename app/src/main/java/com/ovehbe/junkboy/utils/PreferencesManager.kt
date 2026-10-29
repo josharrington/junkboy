@@ -4,9 +4,6 @@ import android.content.Context
 import android.content.SharedPreferences
 import com.ovehbe.junkboy.database.MessageCategory
 import com.ovehbe.junkboy.filters.AllowRule
-import com.ovehbe.junkboy.llm.ModelKind
-import com.ovehbe.junkboy.llm.OpenRouterDecisionsJudge
-import com.ovehbe.junkboy.llm.OpenRouterJudges
 import com.ovehbe.junkboy.pipeline.Pipeline
 import com.ovehbe.junkboy.pipeline.PipelineDefaults
 import com.google.gson.Gson
@@ -33,12 +30,6 @@ class PreferencesManager(context: Context) {
         private const val KEY_NOTIFY_NOTIFICATION = "notify_notification"
         private const val KEY_NOTIFY_TRANSACTION = "notify_transaction"
         private const val KEY_NOTIFY_ALLOWED = "notify_allowed"
-        
-        // OpenRouter second opinion (the key lives only in this prefs file, which is excluded from backups)
-        private const val KEY_OPENROUTER_API_KEY = "openrouter_api_key"
-        private const val KEY_OPENROUTER_MODEL = "openrouter_model"
-        private const val KEY_OPENROUTER_MODEL_KIND = "openrouter_model_kind"
-        private const val KEY_DECISION_CUT = "openrouter_decision_cut"
         
         // Content allowlist (words/regexes that bypass all filtering)
         private const val KEY_CONTENT_ALLOW_RULES = "content_allow_rules"
@@ -175,25 +166,6 @@ class PreferencesManager(context: Context) {
         current.remove(keyword)
         setCustomKeywords(current)
     }
-    
-    // OpenRouter second opinion: blank key means the feature is off
-    fun getOpenRouterApiKey(): String = prefs.getString(KEY_OPENROUTER_API_KEY, "").orEmpty()
-    fun setOpenRouterApiKey(key: String) = prefs.edit().putString(KEY_OPENROUTER_API_KEY, key.trim()).apply()
-    
-    private fun resolvedOpenRouterModel() = OpenRouterJudges.resolve(
-        prefs.getString(KEY_OPENROUTER_MODEL, null),
-        prefs.getString(KEY_OPENROUTER_MODEL_KIND, null)
-    )
-    fun getOpenRouterModel(): String = resolvedOpenRouterModel().first
-    fun getOpenRouterModelKind(): ModelKind = resolvedOpenRouterModel().second
-    fun setOpenRouterModel(model: String, kind: ModelKind) = prefs.edit()
-        .putString(KEY_OPENROUTER_MODEL, model.trim())
-        .putString(KEY_OPENROUTER_MODEL_KIND, kind.stored)
-        .apply()
-    
-    // How far the spam score must exceed the wanted score for a decision model to call a text spam
-    fun getDecisionCut(): Float = prefs.getFloat(KEY_DECISION_CUT, OpenRouterDecisionsJudge.DEFAULT_CUT.toFloat())
-    fun setDecisionCut(cut: Float) = prefs.edit().putFloat(KEY_DECISION_CUT, cut).apply()
     
     // Content allowlist
     fun getAllowRules(): List<AllowRule> {
@@ -481,8 +453,24 @@ class PreferencesManager(context: Context) {
     fun getKeyboardOffset(): Int = prefs.getInt(KEY_KEYBOARD_OFFSET, 0)
     fun setKeyboardOffset(offset: Int) = prefs.edit().putInt(KEY_KEYBOARD_OFFSET, offset).apply()
     
-    // Reset all data
-    fun clearAllData() {
-        prefs.edit().clear().apply()
+    /**
+     * Clears message-derived counters and statistics only. Configuration (pipeline, allow lists,
+     * keywords, mode, retention, backup) is deliberately preserved: "Clear messages" must not
+     * quietly reset the user's rules.
+     */
+    fun resetStatistics() {
+        prefs.edit()
+            .remove(KEY_TOTAL_MESSAGES_FILTERED)
+            .remove(KEY_TOTAL_MESSAGES_BLOCKED)
+            .remove(KEY_DAILY_STATS_DATE)
+            .remove(KEY_DAILY_GENERAL_COUNT)
+            .remove(KEY_DAILY_PROMOTION_COUNT)
+            .remove(KEY_DAILY_NOTIFICATION_COUNT)
+            .remove(KEY_DAILY_TRANSACTION_COUNT)
+            .remove(KEY_DAILY_JUNK_COUNT)
+            .remove(KEY_DAILY_ALLOWED_COUNT)
+            .remove(KEY_DAILY_BLOCKED_COUNT)
+            .remove(KEY_OTP_COPY_COUNT)
+            .apply()
     }
 } 

@@ -2,311 +2,240 @@ package com.ovehbe.junkboy.utils
 
 import android.content.Context
 import android.database.Cursor
-import android.net.Uri
 import android.provider.Telephony
 import android.util.Log
 import com.ovehbe.junkboy.classifier.SmsClassifier
 import com.ovehbe.junkboy.database.AppDatabase
 import com.ovehbe.junkboy.database.FilteredMessage
 import com.ovehbe.junkboy.database.MessageCategory
+import com.ovehbe.junkboy.filters.ContentAllowlist
 import com.ovehbe.junkboy.filters.CustomFilter
+import com.ovehbe.junkboy.filters.Stop2EndDetector
+import com.ovehbe.junkboy.pipeline.DecisionTraceCodec
+import com.ovehbe.junkboy.pipeline.ExecutionPlan
+import com.ovehbe.junkboy.pipeline.MessageContext
+import com.ovehbe.junkboy.pipeline.PipelineRunner
+import com.ovehbe.junkboy.pipeline.decisionSummary
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
-import java.util.*
+import java.util.Date
 
+/**
+ * Imports the device's existing inbox through the same pipeline the service uses.
+ *
+ * Imported messages are recorded as test decisions: the pipeline is evaluated, but nothing is
+ * blocked, replied to or deleted for messages that already arrived. Duplicates are skipped by
+ * (sender, timestamp, body), so running the import twice does not inflate history or statistics.
+ */
 class ExistingMessagesProcessor(private val context: Context) {
-    
+
     companion object {
         private const val TAG = "ExistingMessagesProcessor"
     }
-    
+
     private val database = AppDatabase.getDatabase(context)
     private val preferencesManager = PreferencesManager(context)
     private val smsClassifier = SmsClassifier.getInstance()
-    
+    private val senderHistoryChecker = SenderHistoryChecker(context)
+    private val otpHelper = OtpHelper(context)
+
     suspend fun processAllExistingMessages(): Result<Int> = withContext(Dispatchers.IO) {
         try {
             Log.d(TAG, "Starting to process all existing messages")
-            
-            // Initialize ML classifier
+
             if (!smsClassifier.initialize(context)) {
                 Log.w(TAG, "ML classifier initialization failed, using rule-based filtering only")
             }
-            
-            // Get all SMS messages from device
+
             val existingMessages = readAllSmsMessages()
             Log.d(TAG, "Found ${existingMessages.size} existing messages")
-            
-            var processedCount = 0
-            
-            // Process each message
+
+            val pipeline = preferencesManager.getPipeline()
+            var importedCount = 0
+            var skippedCount = 0
+
             for (smsMessage in existingMessages) {
                 try {
-                    // Process message through filtering logic
-                    val filteredMessage = processMessage(smsMessage)
+                    val alreadyStored = database.filteredMessageDao().countMatchingMessage(
+                        sender = smsMessage.sender,
+                        body = smsMessage.body,
+                        receivedAt = smsMessage.timestamp
+                    ) > 0
+                    if (alreadyStored) {
+                        skippedCount++
+                        continue
+                    }
+
+                    val filteredMessage = processMessage(smsMessage, pipeline)
                     database.filteredMessageDao().insertMessage(filteredMessage)
-                    
-                    // Update statistics for this message
                     updateStatistics(filteredMessage.category, filteredMessage.isBlocked)
-                    
-                    processedCount++
-                    Log.d(TAG, "Processed message from ${smsMessage.sender}: ${smsMessage.body.take(50)}")
-                    
+                    importedCount++
                 } catch (e: Exception) {
                     Log.e(TAG, "Error processing message from ${smsMessage.sender}", e)
                 }
             }
-            
-            Log.d(TAG, "Finished processing $processedCount existing messages")
-            Result.success(processedCount)
-            
+
+            Log.d(TAG, "Finished importing $importedCount existing messages ($skippedCount already stored)")
+            Result.success(importedCount)
         } catch (e: Exception) {
             Log.e(TAG, "Error processing existing messages", e)
             Result.failure(e)
         }
     }
-    
+
     private suspend fun readAllSmsMessages(): List<SmsMessage> {
         val messages = mutableListOf<SmsMessage>()
-        
-        val uri = Telephony.Sms.CONTENT_URI
+
         val projection = arrayOf(
             Telephony.Sms.ADDRESS,
             Telephony.Sms.BODY,
             Telephony.Sms.DATE,
             Telephony.Sms.TYPE
         )
-        
-        val cursor: Cursor? = context.contentResolver.query(
-            uri,
+
+        context.contentResolver.query(
+            Telephony.Sms.CONTENT_URI,
             projection,
             null,
             null,
             "${Telephony.Sms.DATE} DESC"
-        )
-        
-        cursor?.use { c ->
+        )?.use { c: Cursor ->
             val addressIndex = c.getColumnIndexOrThrow(Telephony.Sms.ADDRESS)
             val bodyIndex = c.getColumnIndexOrThrow(Telephony.Sms.BODY)
             val dateIndex = c.getColumnIndexOrThrow(Telephony.Sms.DATE)
             val typeIndex = c.getColumnIndexOrThrow(Telephony.Sms.TYPE)
-            
+
             while (c.moveToNext()) {
-                val address = c.getString(addressIndex) ?: "Unknown"
-                val body = c.getString(bodyIndex) ?: ""
-                val date = c.getLong(dateIndex)
-                val type = c.getInt(typeIndex)
-                
-                // Only process received messages (type 1)
-                if (type == Telephony.Sms.MESSAGE_TYPE_INBOX) {
-                    messages.add(SmsMessage(address, body, date))
+                if (c.getInt(typeIndex) == Telephony.Sms.MESSAGE_TYPE_INBOX) {
+                    messages.add(
+                        SmsMessage(
+                            sender = c.getString(addressIndex) ?: "Unknown",
+                            body = c.getString(bodyIndex) ?: "",
+                            timestamp = c.getLong(dateIndex)
+                        )
+                    )
                 }
             }
         }
-        
+
         return messages
     }
-    
-    private suspend fun processMessage(smsMessage: SmsMessage): FilteredMessage {
-        // Check if sender is in allowed list using FLEXIBLE matching
+
+    private suspend fun processMessage(
+        smsMessage: SmsMessage,
+        pipeline: com.ovehbe.junkboy.pipeline.Pipeline
+    ): FilteredMessage {
         val allowedBySender = isAllowedSenderFlexible(smsMessage.sender)
-        val allowedByContent = !allowedBySender &&
-            com.ovehbe.junkboy.filters.ContentAllowlist.firstMatch(preferencesManager.getAllowRules(), smsMessage.body) != null
-        if (allowedBySender || allowedByContent) {
-            return FilteredMessage(
-                sender = smsMessage.sender,
-                messageBody = smsMessage.body,
-                receivedAt = Date(smsMessage.timestamp),
-                category = MessageCategory.ALLOWED,  // Use ALLOWED category!
-                confidence = 1.0f,
-                filterType = if (allowedBySender) com.ovehbe.junkboy.database.FilterType.ALLOWED_SENDER
-                    else com.ovehbe.junkboy.database.FilterType.ALLOWED_CONTENT,
-                isBlocked = false,
-                isUserOverride = true,
-                isRead = false
-            )
-        }
-        
-        // Get user preferences
-        val isUnderAttackMode = preferencesManager.isUnderAttackMode()
-        val isMlEnabled = preferencesManager.isMlFilteringEnabled()
-        val isKeywordEnabled = preferencesManager.isKeywordFilteringEnabled()
-        val isRegexEnabled = preferencesManager.isRegexFilteringEnabled()
-        val customKeywords = preferencesManager.getCustomKeywords()
-        val customRegexPatterns = preferencesManager.getCustomRegexPatterns()
-        
-        // Apply filtering logic (same hierarchy as SmsFilterService)
-        val filterResult = when {
-            isMlEnabled -> {
-                // ML is enabled - use ML as primary classifier
-                val mlResult = smsClassifier.classify(smsMessage.body)
-                
-                // Also run rule-based filtering for comparison if enabled
-                val ruleResult = if (isKeywordEnabled || isRegexEnabled) {
-                    CustomFilter.filterMessage(
-                        message = smsMessage.body,
-                        sender = smsMessage.sender,
-                        isUnderAttackMode = isUnderAttackMode,
-                        customKeywords = if (isKeywordEnabled) customKeywords else emptyList(),
-                        customRegexPatterns = if (isRegexEnabled) customRegexPatterns else emptyList()
-                    )
-                } else null
-                
-                // Implement same hierarchy as SmsFilterService
-                if (ruleResult != null) {
-                    // When ML is enabled, always preserve ML_CLASSIFICATION FilterType
-                    when {
-                        // If either method wants to block, respect the blocking decision
-                        mlResult.isBlocked || ruleResult.isBlocked -> {
-                            if (mlResult.isBlocked && ruleResult.isBlocked) {
-                                // Both want to block - use higher confidence
-                                if (mlResult.confidence >= ruleResult.confidence) {
-                                    mlResult.copy(matchedRule = "ml_primary_block")
-                                } else {
-                                    mlResult.copy(
-                                        isBlocked = true,
-                                        category = ruleResult.category,
-                                        confidence = ruleResult.confidence,
-                                        matchedRule = "ml_with_rule_block"
-                                    )
-                                }
-                            } else if (mlResult.isBlocked) {
-                                mlResult.copy(matchedRule = "ml_block")
-                            } else {
-                                mlResult.copy(
-                                    isBlocked = true,
-                                    category = ruleResult.category,
-                                    confidence = ruleResult.confidence,
-                                    matchedRule = "ml_enhanced_by_rule_block"
-                                )
-                            }
-                        }
-                        
-                        // Neither wants to block - use ML result for categorization
-                        else -> {
-                            if (mlResult.confidence >= ruleResult.confidence) {
-                                mlResult.copy(matchedRule = "ml_primary")
-                            } else {
-                                mlResult.copy(
-                                    category = ruleResult.category,
-                                    confidence = ruleResult.confidence,
-                                    matchedRule = "ml_with_rule_category"
-                                )
-                            }
-                        }
-                    }
-                } else {
-                    // Only ML is enabled, use ML result
-                    mlResult
-                }
-            }
-            isKeywordEnabled || isRegexEnabled -> {
-                // ML disabled, use rule-based filtering only
-                CustomFilter.filterMessage(
-                    message = smsMessage.body,
-                    sender = smsMessage.sender,
-                    isUnderAttackMode = isUnderAttackMode,
-                    customKeywords = if (isKeywordEnabled) customKeywords else emptyList(),
-                    customRegexPatterns = if (isRegexEnabled) customRegexPatterns else emptyList()
-                )
-            }
-            else -> {
-                // No filtering enabled, neutral result
-                com.ovehbe.junkboy.filters.FilterResult(
-                    isBlocked = false,
-                    category = MessageCategory.GENERAL,
-                    filterType = com.ovehbe.junkboy.database.FilterType.KEYWORD_FILTER,
-                    confidence = 0.0f
-                )
-            }
-        }
-        
+        val allowRule = if (allowedBySender) null
+        else ContentAllowlist.firstMatch(preferencesManager.getAllowRules(), smsMessage.body)
+        val allowedByContent = allowRule != null
+
+        val classification = classify(smsMessage)
+        val context = MessageContext(
+            sender = smsMessage.sender,
+            body = smsMessage.body,
+            timestamp = smsMessage.timestamp,
+            category = classification.category,
+            isBlocked = classification.isBlocked,
+            isContact = senderHistoryChecker.isContact(smsMessage.sender),
+            hasOutboundHistory = senderHistoryChecker.hasOutboundHistory(smsMessage.sender),
+            hasOtp = otpHelper.testOtpDetection(smsMessage.body) != null,
+            hasOptOutDirective = Stop2EndDetector.detect(smsMessage.body) != Stop2EndDetector.Directive.NONE,
+            allowedBySender = allowedBySender,
+            allowedByContent = allowedByContent
+        )
+        val evaluation = PipelineRunner.evaluate(pipeline, context)
+
+        // Historical import never enforces: it records what the pipeline would have done.
+        val plan = ExecutionPlan.forMode(evaluation, enforcing = false)
+
         return FilteredMessage(
             sender = smsMessage.sender,
             messageBody = smsMessage.body,
             receivedAt = Date(smsMessage.timestamp),
-            category = filterResult.category,
-            confidence = filterResult.confidence,
-            filterType = filterResult.filterType,
-            isBlocked = filterResult.isBlocked,
-            isUserOverride = false,
-            isRead = false
+            category = evaluation.category,
+            confidence = classification.confidence,
+            filterType = classification.filterType,
+            isBlocked = plan.block,
+            isUserOverride = evaluation.category == MessageCategory.ALLOWED,
+            isRead = false,
+            isTestMode = true,
+            decisionSummary = evaluation.decisionSummary(),
+            decisionTrace = DecisionTraceCodec.encode(evaluation.trace),
+            decisionStep = evaluation.blockedBy ?: evaluation.repliedBy ?: "",
+            decisionReplyStep = evaluation.repliedBy ?: ""
         )
     }
-    
+
+    /** Classifier evidence only; the pipeline is the policy that decides what happens. */
+    private fun classify(smsMessage: SmsMessage): com.ovehbe.junkboy.filters.FilterResult {
+        val isMlEnabled = preferencesManager.isMlFilteringEnabled()
+        val isKeywordEnabled = preferencesManager.isKeywordFilteringEnabled()
+        val isRegexEnabled = preferencesManager.isRegexFilteringEnabled()
+
+        return when {
+            isMlEnabled -> smsClassifier.classify(smsMessage.body)
+            isKeywordEnabled || isRegexEnabled -> CustomFilter.filterMessage(
+                message = smsMessage.body,
+                sender = smsMessage.sender,
+                isUnderAttackMode = preferencesManager.isUnderAttackMode(),
+                customKeywords = if (isKeywordEnabled) preferencesManager.getCustomKeywords() else emptyList(),
+                customRegexPatterns = if (isRegexEnabled) preferencesManager.getCustomRegexPatterns() else emptyList()
+            )
+            else -> com.ovehbe.junkboy.filters.FilterResult(
+                isBlocked = false,
+                category = MessageCategory.GENERAL,
+                filterType = com.ovehbe.junkboy.database.FilterType.KEYWORD_FILTER,
+                confidence = 0.0f
+            )
+        }
+    }
+
     private fun updateStatistics(category: MessageCategory, isBlocked: Boolean) {
         try {
-            // Update total and category statistics
             preferencesManager.incrementCategoryCount(category)
             if (isBlocked) {
                 preferencesManager.incrementBlockedCount()
             }
-            
-            Log.d(TAG, "Updated statistics for category: $category, blocked: $isBlocked")
         } catch (e: Exception) {
             Log.e(TAG, "Error updating statistics", e)
         }
     }
-    
-    /**
-     * Check if sender is in allowed list with flexible matching
-     */
+
     private suspend fun isAllowedSenderFlexible(sender: String): Boolean {
         val dao = database.allowedSenderDao()
-        
-        // First try exact match
-        if (dao.isAllowedSender(sender)) {
-            return true
-        }
-        
-        // Try case-insensitive match
-        if (dao.isAllowedSenderCaseInsensitive(sender)) {
-            return true
-        }
-        
-        // For phone numbers, try normalized matching
+
+        if (dao.isAllowedSender(sender)) return true
+        if (dao.isAllowedSenderCaseInsensitive(sender)) return true
+
         val normalizedSender = normalizePhoneNumber(sender)
         if (normalizedSender != sender && dao.isAllowedSenderCaseInsensitive(normalizedSender)) {
             return true
         }
-        
-        // Get all allowed senders and check with various normalizations
-        val allowedSenders = dao.getAllowedSendersList()
-        for (allowed in allowedSenders) {
+
+        for (allowed in dao.getAllowedSendersList()) {
             val normalizedAllowed = normalizePhoneNumber(allowed.phoneNumber)
-            
-            // Check if normalized versions match
-            if (normalizedSender == normalizedAllowed) {
+            if (normalizedSender == normalizedAllowed) return true
+            if (normalizedSender.length >= 10 && normalizedAllowed.length >= 10 &&
+                normalizedSender.takeLast(10) == normalizedAllowed.takeLast(10)
+            ) {
                 return true
             }
-            
-            // Check last 10 digits for phone numbers
-            if (normalizedSender.length >= 10 && normalizedAllowed.length >= 10) {
-                val senderLast10 = normalizedSender.takeLast(10)
-                val allowedLast10 = normalizedAllowed.takeLast(10)
-                if (senderLast10 == allowedLast10) {
-                    return true
-                }
-            }
-            
-            // Case-insensitive text match
-            if (sender.equals(allowed.phoneNumber, ignoreCase = true)) {
-                return true
-            }
+            if (sender.equals(allowed.phoneNumber, ignoreCase = true)) return true
         }
-        
+
         return false
     }
-    
+
     private fun normalizePhoneNumber(phone: String): String {
         return phone
             .replace(Regex("[+\\-()\\s]"), "")
             .replace(Regex("^0+"), "")
     }
-    
+
     data class SmsMessage(
         val sender: String,
         val body: String,
         val timestamp: Long
     )
-} 
+}

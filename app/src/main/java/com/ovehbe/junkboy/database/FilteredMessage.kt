@@ -24,8 +24,10 @@ data class FilteredMessage(
     val decisionSummary: String = "",
     /** JSON trace of every step, check and action, for the "why was this filtered?" dialog. */
     val decisionTrace: String = "",
-    /** The step that blocked or replied, used for per-rule analytics. */
-    val decisionStep: String = ""
+    /** The step that blocked, or replied when nothing blocked, used for per-rule analytics. */
+    val decisionStep: String = "",
+    /** The step that asked for a STOP reply, even when a later step also blocked. */
+    val decisionReplyStep: String = ""
 )
 
 enum class MessageCategory {

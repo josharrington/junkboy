@@ -38,6 +38,7 @@ class SmsClassifier private constructor() {
         }
     }
     
+    @Synchronized
     fun initialize(context: Context): Boolean {
         return try {
             // Load TensorFlow Lite model
@@ -63,6 +64,7 @@ class SmsClassifier private constructor() {
         }
     }
     
+    @Synchronized
     fun classify(text: String): FilterResult {
         if (!isInitialized || interpreter == null) {
             Log.w(TAG, "Classifier not initialized, using fallback classification")
@@ -268,6 +270,7 @@ class SmsClassifier private constructor() {
         }
     }
     
+    @Synchronized
     fun cleanup() {
         interpreter?.close()
         interpreter = null

@@ -12,3 +12,11 @@ Captured on a Pixel 9 Pro emulator (Android 14, 1080x2400) from the 1.4.7 build.
 | Message retention (default 2 months) | `screenshots/feature-message-retention.png` |
 
 Earlier feature sets are in the same folder, numbered 01-22.
+
+## Review fixes (1.4.8)
+
+| Change | Screenshot |
+|---|---|
+| Durable pipeline export next to local snapshots | `screenshots/review-fixes-snapshot-export.png` |
+| Lifetime rule activity, independent of message retention | `screenshots/review-fixes-step-activity.png` |
+| Test queue after the reply/block attribution fix | `screenshots/review-fixes-test-queue.png` |
