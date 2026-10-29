@@ -7,6 +7,8 @@ import com.ovehbe.junkboy.filters.AllowRule
 import com.ovehbe.junkboy.llm.ModelKind
 import com.ovehbe.junkboy.llm.OpenRouterDecisionsJudge
 import com.ovehbe.junkboy.llm.OpenRouterJudges
+import com.ovehbe.junkboy.pipeline.Pipeline
+import com.ovehbe.junkboy.pipeline.PipelineDefaults
 import com.google.gson.Gson
 import com.google.gson.reflect.TypeToken
 
@@ -69,6 +71,10 @@ class PreferencesManager(context: Context) {
         private const val KEY_AUTO_REPLY_STOP_ENABLED = "auto_reply_stop_enabled"
         // "_v2": the first version defaulted to off, which was unsafe; ignore any value stored under it
         private const val KEY_AUTO_REPLY_REQUIRE_SPAM = "auto_reply_require_spam_v2"
+
+        // The message pipeline (JSON). Replaces the individual filter/reply toggles going forward.
+        private const val KEY_PIPELINE = "message_pipeline"
+        private const val KEY_PIPELINE_MIGRATED = "message_pipeline_migrated"
         
         // Hub configuration
         private const val KEY_HUB_ENABLED = "hub_enabled"
@@ -304,6 +310,33 @@ class PreferencesManager(context: Context) {
     // On by default: pharmacies, banks and clinics also end real messages with "STOP2END".
     fun isAutoReplyRequireSpam(): Boolean = prefs.getBoolean(KEY_AUTO_REPLY_REQUIRE_SPAM, true)
     fun setAutoReplyRequireSpam(enabled: Boolean) = prefs.edit().putBoolean(KEY_AUTO_REPLY_REQUIRE_SPAM, enabled).apply()
+    
+    // Message pipeline
+    fun getPipeline(): Pipeline {
+        val json = prefs.getString(KEY_PIPELINE, null)
+        if (json != null) {
+            return try {
+                gson.fromJson(json, Pipeline::class.java) ?: PipelineDefaults.default()
+            } catch (e: Exception) {
+                PipelineDefaults.default()
+            }
+        }
+        // First read on an install that predates the pipeline: carry the old Stop2End toggle over
+        // as a step, then remember that the migration ran so later resets are not undone.
+        val migrated = prefs.getBoolean(KEY_PIPELINE_MIGRATED, false)
+        val pipeline = if (migrated) PipelineDefaults.default() else {
+            val built = PipelineDefaults.default(legacyStop2End = isAutoReplyStopEnabled())
+            prefs.edit().putBoolean(KEY_PIPELINE_MIGRATED, true).apply()
+            built
+        }
+        setPipeline(pipeline)
+        return pipeline
+    }
+
+    fun setPipeline(pipeline: Pipeline) =
+        prefs.edit().putString(KEY_PIPELINE, gson.toJson(pipeline)).apply()
+
+    fun resetPipeline() = setPipeline(PipelineDefaults.default())
     
     // OTP Auto-Copy
     fun isOtpAutoCopyEnabled(): Boolean = prefs.getBoolean(KEY_OTP_AUTO_COPY_ENABLED, true)

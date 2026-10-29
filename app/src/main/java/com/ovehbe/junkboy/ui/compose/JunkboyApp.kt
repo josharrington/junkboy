@@ -176,6 +176,7 @@ fun JunkboyApp(
                             onNavigateToSettings = { navController.navigate("settings") },
                             onNavigateToStats = { navController.navigate("stats") },
                             onNavigateToTest = { navController.navigate("test") },
+                            onNavigateToPipeline = { navController.navigate("pipeline") },
                             onNavigateToDashboard = { navController.navigate("dashboard") },
                             refreshTrigger = permissionRefreshTrigger,
                             checkPermissions = checkPermissions
@@ -191,6 +192,9 @@ fun JunkboyApp(
                     }
                     composable("test") {
                         TestFilterScreen()
+                    }
+                    composable("pipeline") {
+                        PipelineScreen()
                     }
                     composable("settings") {
                         SettingsScreen()

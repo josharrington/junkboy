@@ -27,6 +27,7 @@ fun MenuScreen(
     onNavigateToStats: () -> Unit,
     onNavigateToTest: () -> Unit,
     onNavigateToDashboard: () -> Unit,
+    onNavigateToPipeline: () -> Unit = {},
     refreshTrigger: Int = 0,
     checkPermissions: () -> Boolean = { true }
 ) {
@@ -147,6 +148,13 @@ fun MenuScreen(
                     subtitle = "Configure filtering and notifications",
                     icon = Icons.Default.Settings,
                     onClick = onNavigateToSettings
+                )
+                
+                MenuItem(
+                    title = "Pipeline",
+                    subtitle = "Ordered steps that decide what happens to a message",
+                    icon = Icons.Default.AccountTree,
+                    onClick = onNavigateToPipeline
                 )
                 
                 MenuItem(

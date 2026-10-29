@@ -474,8 +474,54 @@ private fun SampleMessageItem(
     }
 }
 
-// Helper function to test message (implementation would be similar to original)
 private suspend fun testFilterMessage(
+    context: android.content.Context,
+    sender: String,
+    message: String,
+    isUnderAttackMode: Boolean,
+    customKeywords: List<String>,
+    customRegexPatterns: List<String>,
+    smsClassifier: com.ovehbe.junkboy.classifier.SmsClassifier
+): TestFilterResult {
+    val analysis = analyzeMessage(
+        context, sender, message, isUnderAttackMode, customKeywords, customRegexPatterns, smsClassifier
+    )
+    return try {
+        val prefs = com.ovehbe.junkboy.utils.PreferencesManager(context)
+        val history = com.ovehbe.junkboy.utils.SenderHistoryChecker(context)
+        val evaluation = com.ovehbe.junkboy.pipeline.PipelineRunner.evaluate(
+            prefs.getPipeline(),
+            com.ovehbe.junkboy.pipeline.MessageContext(
+                sender = sender,
+                body = message,
+                timestamp = System.currentTimeMillis(),
+                category = analysis.category,
+                isBlocked = analysis.isBlocked,
+                isContact = history.isContact(sender),
+                hasOutboundHistory = history.hasOutboundHistory(sender),
+                hasOtp = com.ovehbe.junkboy.utils.OtpHelper(context).testOtpDetection(message) != null,
+                hasOptOutDirective = com.ovehbe.junkboy.filters.Stop2EndDetector.detect(message) !=
+                    com.ovehbe.junkboy.filters.Stop2EndDetector.Directive.NONE,
+                allowedBySender = analysis.filterType == com.ovehbe.junkboy.database.FilterType.ALLOWED_SENDER,
+                allowedByContent = analysis.filterType == com.ovehbe.junkboy.database.FilterType.ALLOWED_CONTENT
+            )
+        )
+        val trace = evaluation.trace.joinToString(" | ") { step ->
+            if (step.matched) "${step.stepName}: match${if (step.actions.isEmpty()) "" else " → " + step.actions.joinToString(",")}"
+            else "${step.stepName}: skip"
+        }.ifEmpty { "empty pipeline" }
+        analysis.copy(
+            category = evaluation.category,
+            isBlocked = evaluation.blocked,
+            details = analysis.details + "\nPipeline: " + trace
+        )
+    } catch (e: Exception) {
+        analysis
+    }
+}
+
+// Helper function to test message (implementation would be similar to original)
+private suspend fun analyzeMessage(
     context: android.content.Context,
     sender: String,
     message: String,
