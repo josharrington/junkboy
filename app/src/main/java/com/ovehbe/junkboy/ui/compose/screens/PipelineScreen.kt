@@ -33,12 +33,15 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.ovehbe.junkboy.database.AppDatabase
 import com.ovehbe.junkboy.database.MessageCategory
+import com.ovehbe.junkboy.database.StepStats
 import com.ovehbe.junkboy.filters.AllowRule
 import com.ovehbe.junkboy.filters.ContentAllowlist
 import com.ovehbe.junkboy.pipeline.*
 import com.ovehbe.junkboy.ui.theme.DesignColors
 import com.ovehbe.junkboy.ui.theme.DesignSpacing
 import com.ovehbe.junkboy.utils.PreferencesManager
+import java.text.DateFormat
+import java.util.Date
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -50,7 +53,11 @@ import java.io.File
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun PipelineScreen(onOpenLab: () -> Unit = {}, onOpenSuggested: () -> Unit = {}) {
+fun PipelineScreen(
+    onOpenLab: () -> Unit = {},
+    onOpenSuggested: () -> Unit = {},
+    onOpenTestDecisions: () -> Unit = {}
+) {
     val context = LocalContext.current
     val preferencesManager = remember { PreferencesManager(context) }
     var pipeline by remember { mutableStateOf(preferencesManager.getPipeline()) }
@@ -59,6 +66,8 @@ fun PipelineScreen(onOpenLab: () -> Unit = {}, onOpenSuggested: () -> Unit = {})
     var showPoliticalDialog by remember { mutableStateOf(false) }
     var showResetDialog by remember { mutableStateOf(false) }
     var enforcing by remember { mutableStateOf(preferencesManager.isEnforcementEnabled()) }
+    var autoPause by remember { mutableStateOf(preferencesManager.isAutoPauseStaleEnabled()) }
+    var pausedNote by remember { mutableStateOf("") }
     var showExport by remember { mutableStateOf(false) }
     var exportText by remember { mutableStateOf("") }
     var showImport by remember { mutableStateOf(false) }
@@ -87,6 +96,11 @@ fun PipelineScreen(onOpenLab: () -> Unit = {}, onOpenSuggested: () -> Unit = {})
         }
     }
     val database = remember { AppDatabase.getDatabase(context) }
+    val stepStats by remember { database.filteredMessageDao().getStepStats() }
+        .collectAsState(initial = emptyList())
+    val statsByStep = remember(stepStats) { stepStats.associateBy { it.step } }
+    val staleCutoff = System.currentTimeMillis() - 90L * 24 * 60 * 60 * 1000
+
     var contactsGranted by remember {
         mutableStateOf(
             ContextCompat.checkSelfPermission(context, Manifest.permission.READ_CONTACTS) ==
@@ -123,6 +137,25 @@ fun PipelineScreen(onOpenLab: () -> Unit = {}, onOpenSuggested: () -> Unit = {})
         steps.add(target, item)
         save(pipeline.copy(steps = steps))
     }
+
+    LaunchedEffect(stepStats, autoPause) {
+        if (!autoPause || stepStats.isEmpty()) return@LaunchedEffect
+        val staleNames = stepStats
+            .filter { it.hits > it.testHits && it.lastEnforcedHit != null && it.lastEnforcedHit < staleCutoff }
+            .map { it.step }
+            .toSet()
+        val staleSteps = pipeline.steps.filter { it.enabled && it.name in staleNames }
+        if (staleSteps.isEmpty()) return@LaunchedEffect
+        val next = pipeline.copy(
+            steps = pipeline.steps.map { step ->
+                if (step.enabled && step.name in staleNames) step.copy(enabled = false) else step
+            }
+        )
+        save(next)
+        pausedNote = "Paused ${staleSteps.size} stale rule(s): " +
+            staleSteps.joinToString(", ") { it.name } + " (90 days without a hit)"
+    }
+
 
     if (editing != null) {
         StepEditorDialog(
@@ -348,7 +381,38 @@ fun PipelineScreen(onOpenLab: () -> Unit = {}, onOpenSuggested: () -> Unit = {})
                         color = if (enforcing) DesignColors.Secondary else MaterialTheme.colorScheme.error,
                         modifier = Modifier.padding(top = DesignSpacing.XS)
                     )
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(top = DesignSpacing.XS),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(Modifier.weight(1f)) {
+                            Text("Auto-pause stale rules", style = MaterialTheme.typography.bodyMedium)
+                            Text(
+                                "Disables rules that hit before but have not hit in 90 days.",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = DesignColors.Secondary
+                            )
+                        }
+                        Switch(
+                            checked = autoPause,
+                            onCheckedChange = {
+                                autoPause = it
+                                preferencesManager.setAutoPauseStaleEnabled(it)
+                            }
+                        )
+                    }
                 }
+            }
+
+            if (pausedNote.isNotEmpty()) {
+                Text(
+                    pausedNote,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error,
+                    modifier = Modifier.padding(bottom = DesignSpacing.SM)
+                )
             }
 
             Row(horizontalArrangement = Arrangement.spacedBy(DesignSpacing.SM)) {
@@ -369,6 +433,12 @@ fun PipelineScreen(onOpenLab: () -> Unit = {}, onOpenSuggested: () -> Unit = {})
                 OutlinedButton(onClick = onOpenLab) { Text("Run 20 sample messages") }
                 OutlinedButton(onClick = onOpenSuggested) { Text("Suggested rules") }
             }
+            OutlinedButton(
+                onClick = onOpenTestDecisions,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = DesignSpacing.SM)
+            ) { Text("Review test decisions") }
         }
 
         if (!contactsGranted) {
@@ -412,6 +482,7 @@ fun PipelineScreen(onOpenLab: () -> Unit = {}, onOpenSuggested: () -> Unit = {})
             StepCard(
                 index = index,
                 step = step,
+                stats = statsByStep[step.name],
                 canMoveUp = index > 0,
                 canMoveDown = index < pipeline.steps.lastIndex,
                 onToggle = { enabled ->
@@ -508,6 +579,7 @@ fun PipelineScreen(onOpenLab: () -> Unit = {}, onOpenSuggested: () -> Unit = {})
 private fun StepCard(
     index: Int,
     step: Step,
+    stats: StepStats?,
     canMoveUp: Boolean,
     canMoveDown: Boolean,
     onToggle: (Boolean) -> Unit,
@@ -536,6 +608,41 @@ private fun StepCard(
                 color = DesignColors.Secondary,
                 modifier = Modifier.padding(top = 2.dp)
             )
+            val lastHit = stats?.lastHit
+            val stale = stats != null && stats.hits > stats.testHits &&
+                stats.lastEnforcedHit != null &&
+                stats.lastEnforcedHit < System.currentTimeMillis() - 90L * 24 * 60 * 60 * 1000
+            Row(
+                modifier = Modifier.padding(top = 2.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    when {
+                        stats == null -> "No hits yet"
+                        else -> buildString {
+                            val enforced = stats.hits - stats.testHits
+                            append("$enforced hit")
+                            if (enforced != 1) append("s")
+                            if (stats.testHits > 0) append(" · ${stats.testHits} test")
+                            if (lastHit != null) {
+                                append(" · last " + DateFormat.getDateInstance(DateFormat.MEDIUM)
+                                    .format(Date(lastHit)))
+                            }
+                            if (stats.allowedAfter > 0) append(" · ${stats.allowedAfter} allowed after")
+                        }
+                    },
+                    style = MaterialTheme.typography.labelSmall,
+                    color = if (stale) MaterialTheme.colorScheme.error else DesignColors.Secondary
+                )
+                if (stale) {
+                    Spacer(Modifier.width(6.dp))
+                    Text(
+                        "STALE",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.error
+                    )
+                }
+            }
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.End

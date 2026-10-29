@@ -16,7 +16,17 @@ data class SmsConversationSummary(
     val lastCategory: MessageCategory,
     val hasBlocked: Boolean,
     val lastIsTest: Boolean = false,
-    val lastDecisionSummary: String = ""
+    val lastDecisionSummary: String = "",
+    val lastDecisionTrace: String = ""
+)
+
+data class StepStats(
+    val step: String,
+    val hits: Int,
+    val testHits: Int,
+    val allowedAfter: Int,
+    val lastHit: Long?,
+    val lastEnforcedHit: Long?
 )
 
 @Dao
@@ -75,6 +85,24 @@ interface FilteredMessageDao {
     
     @Query("DELETE FROM filtered_messages WHERE receivedAt < :before")
     suspend fun deleteMessagesOlderThan(before: Date): Int
+
+    @Query("SELECT * FROM filtered_messages WHERE isTestMode = 1 ORDER BY receivedAt DESC")
+    fun getTestMessages(): Flow<List<FilteredMessage>>
+
+    @Query("DELETE FROM filtered_messages WHERE isTestMode = 1")
+    suspend fun deleteTestMessages(): Int
+
+    @Query("""
+        SELECT decisionStep as step, COUNT(*) as hits,
+               SUM(CASE WHEN isTestMode = 1 THEN 1 ELSE 0 END) as testHits,
+               SUM(CASE WHEN category = 'ALLOWED' THEN 1 ELSE 0 END) as allowedAfter,
+               MAX(receivedAt) as lastHit,
+               MAX(CASE WHEN isTestMode = 0 THEN receivedAt END) as lastEnforcedHit
+        FROM filtered_messages
+        WHERE decisionStep != ''
+        GROUP BY decisionStep
+    """)
+    fun getStepStats(): Flow<List<StepStats>>
     
     @Query("DELETE FROM filtered_messages WHERE category = :category")
     suspend fun deleteMessagesByCategory(category: MessageCategory): Int
@@ -116,6 +144,7 @@ interface FilteredMessageDao {
             (SELECT category FROM filtered_messages fm2 WHERE fm2.sender = fm.sender ORDER BY receivedAt DESC LIMIT 1) as lastCategory,
             (SELECT isTestMode FROM filtered_messages fm2 WHERE fm2.sender = fm.sender ORDER BY receivedAt DESC LIMIT 1) as lastIsTest,
             (SELECT decisionSummary FROM filtered_messages fm2 WHERE fm2.sender = fm.sender ORDER BY receivedAt DESC LIMIT 1) as lastDecisionSummary,
+            (SELECT decisionTrace FROM filtered_messages fm2 WHERE fm2.sender = fm.sender ORDER BY receivedAt DESC LIMIT 1) as lastDecisionTrace,
             MAX(CASE WHEN isBlocked = 1 THEN 1 ELSE 0 END) as hasBlocked
         FROM filtered_messages fm
         WHERE isBlocked = 0
@@ -137,6 +166,7 @@ interface FilteredMessageDao {
             (SELECT category FROM filtered_messages fm2 WHERE fm2.sender = fm.sender ORDER BY receivedAt DESC LIMIT 1) as lastCategory,
             (SELECT isTestMode FROM filtered_messages fm2 WHERE fm2.sender = fm.sender ORDER BY receivedAt DESC LIMIT 1) as lastIsTest,
             (SELECT decisionSummary FROM filtered_messages fm2 WHERE fm2.sender = fm.sender ORDER BY receivedAt DESC LIMIT 1) as lastDecisionSummary,
+            (SELECT decisionTrace FROM filtered_messages fm2 WHERE fm2.sender = fm.sender ORDER BY receivedAt DESC LIMIT 1) as lastDecisionTrace,
             MAX(CASE WHEN isBlocked = 1 THEN 1 ELSE 0 END) as hasBlocked
         FROM filtered_messages fm
         GROUP BY sender
@@ -157,6 +187,7 @@ interface FilteredMessageDao {
             (SELECT category FROM filtered_messages fm2 WHERE fm2.sender = fm.sender ORDER BY receivedAt DESC LIMIT 1) as lastCategory,
             (SELECT isTestMode FROM filtered_messages fm2 WHERE fm2.sender = fm.sender ORDER BY receivedAt DESC LIMIT 1) as lastIsTest,
             (SELECT decisionSummary FROM filtered_messages fm2 WHERE fm2.sender = fm.sender ORDER BY receivedAt DESC LIMIT 1) as lastDecisionSummary,
+            (SELECT decisionTrace FROM filtered_messages fm2 WHERE fm2.sender = fm.sender ORDER BY receivedAt DESC LIMIT 1) as lastDecisionTrace,
             1 as hasBlocked
         FROM filtered_messages fm
         WHERE isBlocked = 1

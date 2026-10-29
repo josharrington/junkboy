@@ -15,6 +15,7 @@ import com.ovehbe.junkboy.filters.ContentAllowlist
 import com.ovehbe.junkboy.filters.CustomFilter
 import com.ovehbe.junkboy.filters.FilterResult
 import com.ovehbe.junkboy.filters.Stop2EndDetector
+import com.ovehbe.junkboy.pipeline.DecisionTraceCodec
 import com.ovehbe.junkboy.pipeline.ExecutionPlan
 import com.ovehbe.junkboy.pipeline.MessageContext
 import com.ovehbe.junkboy.pipeline.PipelineRunner
@@ -259,7 +260,9 @@ class SmsFilterService : Service() {
                     isUserOverride = isAllowed,
                     isRead = false,
                     isTestMode = !enforcing,
-                    decisionSummary = if (enforcing) "" else evaluation.decisionSummary()
+                    decisionSummary = if (enforcing) "" else evaluation.decisionSummary(),
+                    decisionTrace = DecisionTraceCodec.encode(evaluation.trace),
+                    decisionStep = evaluation.blockedBy ?: evaluation.repliedBy ?: ""
                 )
 
                 val messageId = database.filteredMessageDao().insertMessage(filteredMessage)

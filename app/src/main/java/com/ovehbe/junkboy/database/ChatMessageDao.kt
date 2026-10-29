@@ -71,6 +71,9 @@ interface ChatMessageDao {
     
     @Query("DELETE FROM chat_messages")
     suspend fun deleteAllChatMessages()
+
+    @Query("DELETE FROM chat_messages WHERE receivedAt < :before")
+    suspend fun deleteChatMessagesOlderThan(before: Date): Int
     
     @Query("SELECT COUNT(*) FROM chat_messages")
     suspend fun getChatMessageCount(): Int

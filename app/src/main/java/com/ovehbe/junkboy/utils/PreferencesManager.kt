@@ -78,6 +78,11 @@ class PreferencesManager(context: Context) {
 
         // Enforcing performs pipeline actions; testing only records what would happen.
         private const val KEY_ENFORCEMENT_ENABLED = "pipeline_enforcement_enabled"
+        // Auto-pause rules that used to fire but have not fired for 90 days.
+        private const val KEY_AUTO_PAUSE_STALE = "pipeline_auto_pause_stale"
+        // Local data lifecycle
+        private const val KEY_RETENTION_DAYS = "message_retention_days"
+        private const val KEY_BACKUP_ENABLED = "pipeline_backup_enabled"
         
         // Hub configuration
         private const val KEY_HUB_ENABLED = "hub_enabled"
@@ -344,6 +349,19 @@ class PreferencesManager(context: Context) {
     fun isEnforcementEnabled(): Boolean = prefs.getBoolean(KEY_ENFORCEMENT_ENABLED, true)
     fun setEnforcementEnabled(enabled: Boolean) =
         prefs.edit().putBoolean(KEY_ENFORCEMENT_ENABLED, enabled).apply()
+
+    fun isAutoPauseStaleEnabled(): Boolean = prefs.getBoolean(KEY_AUTO_PAUSE_STALE, false)
+    fun setAutoPauseStaleEnabled(enabled: Boolean) =
+        prefs.edit().putBoolean(KEY_AUTO_PAUSE_STALE, enabled).apply()
+
+    /** Days to keep messages in Junkboy's database; 0 means never delete. */
+    fun getMessageRetentionDays(): Int = prefs.getInt(KEY_RETENTION_DAYS, 60)
+    fun setMessageRetentionDays(days: Int) =
+        prefs.edit().putInt(KEY_RETENTION_DAYS, days).apply()
+
+    fun isBackupEnabled(): Boolean = prefs.getBoolean(KEY_BACKUP_ENABLED, true)
+    fun setBackupEnabled(enabled: Boolean) =
+        prefs.edit().putBoolean(KEY_BACKUP_ENABLED, enabled).apply()
     
     // OTP Auto-Copy
     fun isOtpAutoCopyEnabled(): Boolean = prefs.getBoolean(KEY_OTP_AUTO_COPY_ENABLED, true)

@@ -406,6 +406,7 @@ private fun ConversationCard(
     onAllowSender: () -> Unit
 ) {
     var showMenu by remember { mutableStateOf(false) }
+    var showDecision by remember { mutableStateOf(false) }
     
     Card(
         modifier = Modifier
@@ -556,6 +557,14 @@ private fun ConversationCard(
                                 onDismissRequest = { showMenu = false }
                             ) {
                                 DropdownMenuItem(
+                                    text = { Text("Why was this filtered?") },
+                                    leadingIcon = { Icon(Icons.Default.Search, null) },
+                                    onClick = {
+                                        showMenu = false
+                                        showDecision = true
+                                    }
+                                )
+                                DropdownMenuItem(
                                     text = { Text("Open in SMS app") },
                                     leadingIcon = { Icon(Icons.Default.OpenInNew, null) },
                                     onClick = {
@@ -590,6 +599,19 @@ private fun ConversationCard(
             }
         }
     }
+
+    if (showDecision) {
+        DecisionTraceDialog(
+            sender = conversation.sender,
+            body = conversation.lastMessage,
+            category = conversation.lastCategory,
+            isTest = conversation.lastIsTest,
+            isBlocked = conversation.hasBlocked,
+            summary = conversation.lastDecisionSummary,
+            traceJson = conversation.lastDecisionTrace,
+            onDismiss = { showDecision = false }
+        )
+    }
 }
 
 @Composable
@@ -599,6 +621,7 @@ private fun MessageCard(
     onAllowSender: () -> Unit
 ) {
     var showMenu by remember { mutableStateOf(false) }
+    var showDecision by remember { mutableStateOf(false) }
     
     Card(
         modifier = Modifier
@@ -709,6 +732,14 @@ private fun MessageCard(
                             onDismissRequest = { showMenu = false }
                         ) {
                             DropdownMenuItem(
+                                text = { Text("Why was this filtered?") },
+                                leadingIcon = { Icon(Icons.Default.Search, null) },
+                                onClick = {
+                                    showMenu = false
+                                    showDecision = true
+                                }
+                            )
+                            DropdownMenuItem(
                                 text = { Text("Open in SMS app") },
                                 leadingIcon = { Icon(Icons.Default.OpenInNew, null) },
                                 onClick = {
@@ -779,6 +810,19 @@ private fun MessageCard(
                 }
             }
         }
+    }
+
+    if (showDecision) {
+        DecisionTraceDialog(
+            sender = message.sender,
+            body = message.messageBody,
+            category = message.category,
+            isTest = message.isTestMode,
+            isBlocked = message.isBlocked,
+            summary = message.decisionSummary,
+            traceJson = message.decisionTrace,
+            onDismiss = { showDecision = false }
+        )
     }
 }
 

@@ -18,6 +18,7 @@ import androidx.core.view.WindowCompat
 import com.ovehbe.junkboy.ui.compose.JunkboyApp
 import com.ovehbe.junkboy.ui.theme.JunkboyTheme
 import com.ovehbe.junkboy.utils.PreferencesManager
+import com.ovehbe.junkboy.work.WorkScheduler
 
 class MainActivity : ComponentActivity() {
     
@@ -45,6 +46,7 @@ class MainActivity : ComponentActivity() {
         WindowCompat.setDecorFitsSystemWindows(window, false)
         
         preferencesManager = PreferencesManager(this)
+        WorkScheduler.schedule(this)
         
         setContent {
             JunkboyTheme {

@@ -33,4 +33,7 @@ interface AutoReplyLogDao {
 
     @Query("DELETE FROM auto_reply_log")
     suspend fun clear()
+
+    @Query("DELETE FROM auto_reply_log WHERE repliedAt < :before")
+    suspend fun deleteRepliesOlderThan(before: Long): Int
 }

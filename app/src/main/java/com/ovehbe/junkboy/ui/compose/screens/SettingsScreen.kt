@@ -9,6 +9,7 @@ import androidx.core.content.ContextCompat
 import java.text.DateFormat
 import java.util.Date
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -30,6 +31,7 @@ import com.ovehbe.junkboy.utils.PreferencesManager
 import com.ovehbe.junkboy.utils.SmsAppManager
 import com.ovehbe.junkboy.utils.SmsDeleter
 import com.ovehbe.junkboy.utils.CsvExporter
+import com.ovehbe.junkboy.work.PipelineBackup
 import com.ovehbe.junkboy.service.NotificationListenerService
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -100,6 +102,10 @@ fun SettingsScreen() {
     var showAddRegexDialog by remember { mutableStateOf(false) }
     var showAddAllowedSenderDialog by remember { mutableStateOf(false) }
     var showClearDataDialog by remember { mutableStateOf(false) }
+    var retentionDays by remember { mutableStateOf(60) }
+    var showRetentionDialog by remember { mutableStateOf(false) }
+    var backupEnabled by remember { mutableStateOf(true) }
+    var backupResult by remember { mutableStateOf<String?>(null) }
     var isProcessingExistingMessages by remember { mutableStateOf(false) }
     var isExporting by remember { mutableStateOf(false) }
     var processingResult by remember { mutableStateOf<String?>(null) }
@@ -117,6 +123,8 @@ fun SettingsScreen() {
         autoDeleteJunk = preferencesManager.isAutoDeleteJunkEnabled()
         autoDeleteStatus = smsDeleter.getAutoDeleteStatus()
         otpAutoCopy = preferencesManager.isOtpAutoCopyEnabled()
+        retentionDays = preferencesManager.getMessageRetentionDays()
+        backupEnabled = preferencesManager.isBackupEnabled()
         hubNotifications = preferencesManager.isHubNotificationsEnabled()
         enabledHubApps = preferencesManager.getEnabledHubApps()
         
@@ -950,6 +958,64 @@ fun SettingsScreen() {
                 )
             }
         }
+
+        // Message retention
+        item {
+            SettingsSection(
+                title = "Message Retention",
+                icon = Icons.Default.AutoDelete
+            ) {
+                ActionSettingItem(
+                    title = "Keep messages for",
+                    subtitle = retentionLabel(retentionDays),
+                    icon = Icons.Default.Schedule,
+                    onClick = { showRetentionDialog = true }
+                )
+                Text(
+                    "Junkboy deletes its own copy of messages older than this. Google Messages, " +
+                        "your carrier and any other SMS app are not affected.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = DesignColors.Secondary,
+                    modifier = Modifier.padding(horizontal = DesignSpacing.MD)
+                )
+            }
+        }
+
+        // Local backup
+        item {
+            SettingsSection(
+                title = "Local Backup",
+                icon = Icons.Default.Backup
+            ) {
+                ToggleSettingItem(
+                    title = "Daily backup",
+                    subtitle = "Writes pipeline.yaml and a settings snapshot once a day",
+                    checked = backupEnabled,
+                    onCheckedChange = {
+                        backupEnabled = it
+                        preferencesManager.setBackupEnabled(it)
+                    }
+                )
+                ActionSettingItem(
+                    title = "Back up now",
+                    subtitle = backupResult ?: "Saved on this device under backups/",
+                    icon = Icons.Default.Save,
+                    onClick = {
+                        serviceScope.launch {
+                            backupResult = PipelineBackup.write(context)
+                                ?.let { "Saved ${it.name}" }
+                                ?: "Backup failed"
+                        }
+                    }
+                )
+                Text(
+                    "Files go to Android/data/com.ovehbe.junkboy/files/backups. Nothing is uploaded.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = DesignColors.Secondary,
+                    modifier = Modifier.padding(horizontal = DesignSpacing.MD)
+                )
+            }
+        }
     }
     
     // Dialog handlers
@@ -1017,6 +1083,18 @@ fun SettingsScreen() {
         )
     }
     
+    if (showRetentionDialog) {
+        RetentionDialog(
+            current = retentionDays,
+            onDismiss = { showRetentionDialog = false },
+            onPick = { days ->
+                retentionDays = days
+                preferencesManager.setMessageRetentionDays(days)
+                showRetentionDialog = false
+            }
+        )
+    }
+
     if (showClearDataDialog) {
         ClearDataDialog(
             onDismiss = { showClearDataDialog = false },
@@ -1730,3 +1808,44 @@ private fun getCategoryDisplayColor(category: com.ovehbe.junkboy.database.Messag
         com.ovehbe.junkboy.database.MessageCategory.ALLOWED -> DesignColors.AllowedMessage
     }
 } 
+
+private fun retentionLabel(days: Int): String = when (days) {
+    0 -> "Never delete"
+    30 -> "1 month"
+    60 -> "2 months (default)"
+    90 -> "3 months"
+    180 -> "6 months"
+    365 -> "1 year"
+    else -> "$days days"
+}
+
+@Composable
+private fun RetentionDialog(current: Int, onDismiss: () -> Unit, onPick: (Int) -> Unit) {
+    val options = listOf(30, 60, 90, 180, 365, 0)
+    var selected by remember { mutableStateOf(current) }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Keep messages for") },
+        text = {
+            Column {
+                options.forEach { days ->
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { selected = days }
+                            .padding(vertical = 6.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        RadioButton(selected = selected == days, onClick = { selected = days })
+                        Text(retentionLabel(days))
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = { onPick(selected) }) { Text("Save") }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } }
+    )
+}
