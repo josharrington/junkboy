@@ -139,6 +139,32 @@ class PipelineRunnerTest {
     }
 
     @Test
+    fun `trace records each check and action for the detail view`() {
+        val pipeline = Pipeline(
+            steps = listOf(
+                step(
+                    "detail",
+                    checks = listOf(
+                        CheckSpec(CheckType.ALWAYS),
+                        CheckSpec(CheckType.IS_CONTACT, expected = false)
+                    ),
+                    actions = listOf(
+                        ActionSpec(ActionType.LABEL, MessageCategory.JUNK),
+                        ActionSpec(ActionType.PASS)
+                    )
+                )
+            )
+        )
+
+        val trace = PipelineRunner.evaluate(pipeline, ctx(contact = false)).trace.single()
+
+        assertTrue(trace.matched)
+        assertEquals(2, trace.checks.size)
+        assertTrue(trace.checks.all { it.second })
+        assertEquals(listOf("label:JUNK", "pass"), trace.actions)
+    }
+
+    @Test
     fun `ANY mode matches when one check passes`() {
         val pipeline = Pipeline(
             steps = listOf(

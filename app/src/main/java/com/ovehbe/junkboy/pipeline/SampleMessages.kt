@@ -25,7 +25,8 @@ data class SampleMessage(
 data class SampleResult(
     val sample: SampleMessage,
     val evaluation: Evaluation,
-    val verdict: FilterResult
+    val verdict: FilterResult,
+    val context: MessageContext
 ) {
     val blockedMatches: Boolean get() = evaluation.blocked == sample.expectBlocked
     val replyMatches: Boolean get() = evaluation.replyStop == sample.expectReply
@@ -279,7 +280,8 @@ object SampleMessages {
             SampleResult(
                 sample = sample,
                 evaluation = PipelineRunner.evaluate(pipeline, context),
-                verdict = verdict
+                verdict = verdict,
+                context = context
             )
         }
 }
