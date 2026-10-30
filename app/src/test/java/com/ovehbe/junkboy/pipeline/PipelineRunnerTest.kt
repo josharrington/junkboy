@@ -227,3 +227,62 @@ class PipelineRunnerTest {
         assertEquals(0, PipelineDefaults.insertionIndex(withBlockEarly))
     }
 }
+
+class PipelineRunnerCaseInsensitiveTest {
+
+    private fun context(body: String, sender: String = "+15555550100") = MessageContext(
+        sender = sender,
+        body = body,
+        timestamp = 0L,
+        category = MessageCategory.GENERAL,
+        isBlocked = false,
+        isContact = false,
+        hasOutboundHistory = false,
+        hasOtp = false,
+        hasOptOutDirective = false,
+        allowedBySender = false,
+        allowedByContent = false
+    )
+
+    @Test
+    fun `keyword check ignores case in the message`() {
+        val step = Step(
+            id = "a",
+            name = "Lottery",
+            checks = listOf(CheckSpec(CheckType.TEXT_MATCHES, rules = listOf(AllowRule("lottery")))),
+            actions = listOf(ActionSpec(ActionType.BLOCK))
+        )
+
+        val evaluation = PipelineRunner.evaluate(Pipeline(steps = listOf(step)), context("You won the LOTTERY"))
+
+        assertTrue(evaluation.blocked)
+    }
+
+    @Test
+    fun `keyword check ignores case in the rule`() {
+        val step = Step(
+            id = "a",
+            name = "Lottery",
+            checks = listOf(CheckSpec(CheckType.TEXT_MATCHES, rules = listOf(AllowRule("LOTTERY")))),
+            actions = listOf(ActionSpec(ActionType.BLOCK))
+        )
+
+        val evaluation = PipelineRunner.evaluate(Pipeline(steps = listOf(step)), context("you won the lottery"))
+
+        assertTrue(evaluation.blocked)
+    }
+
+    @Test
+    fun `sender matching ignores case for text senders`() {
+        val step = Step(
+            id = "a",
+            name = "Bank",
+            checks = listOf(CheckSpec(CheckType.SENDER_MATCHES, rules = listOf(AllowRule("MyBank")))),
+            actions = listOf(ActionSpec(ActionType.BLOCK))
+        )
+
+        val evaluation = PipelineRunner.evaluate(Pipeline(steps = listOf(step)), context("hello", "mybank"))
+
+        assertTrue(evaluation.blocked)
+    }
+}

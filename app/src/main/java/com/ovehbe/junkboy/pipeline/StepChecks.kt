@@ -13,13 +13,17 @@ object StepChecks {
     fun indexOf(checks: List<CheckSpec>, type: CheckType): Int =
         checks.indexOfFirst { it.type == type }
 
-    /** Appends [rule] unless an equivalent rule is already present. */
+    /**
+     * Appends [rule] unless an equivalent rule is already present. Matching is case-insensitive,
+     * because that is how the rule is evaluated: "Lottery" and "lottery" are the same keyword.
+     */
     fun addRule(check: CheckSpec, rule: AllowRule): CheckSpec {
-        val exists = check.rules.any {
-            it.isRegex == rule.isRegex && it.pattern == rule.pattern
-        }
+        val exists = check.rules.any { sameRule(it, rule) }
         return if (exists) check else check.copy(rules = check.rules + rule)
     }
+
+    private fun sameRule(a: AllowRule, b: AllowRule): Boolean =
+        a.isRegex == b.isRegex && a.pattern.trim().equals(b.pattern.trim(), ignoreCase = true)
 
     /**
      * Collapses duplicate check types: rule lists are concatenated (deduplicated), category sets are
@@ -38,7 +42,9 @@ object StepChecks {
                 val previous = result[existingIndex]
                 result[existingIndex] = when (check.type) {
                     CheckType.TEXT_MATCHES, CheckType.SENDER_MATCHES ->
-                        previous.copy(rules = (previous.rules + check.rules).distinct())
+                        previous.copy(rules = check.rules.fold(previous.rules) { rules, rule ->
+                            if (rules.any { sameRule(it, rule) }) rules else rules + rule
+                        })
                     CheckType.CATEGORY_IS ->
                         previous.copy(categories = (previous.categories + check.categories).distinct())
                     else -> previous

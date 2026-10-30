@@ -28,6 +28,34 @@ class StepChecksTest {
     }
 
     @Test
+    fun `keywords are deduplicated case-insensitively`() {
+        val check = CheckSpec(type = CheckType.TEXT_MATCHES, rules = listOf(AllowRule("Lottery")))
+
+        val merged = StepChecks.addRule(check, AllowRule("lottery"))
+
+        assertEquals(listOf("Lottery"), merged.rules.map { it.pattern })
+    }
+
+    @Test
+    fun `regexes are deduplicated case-insensitively`() {
+        val check = CheckSpec(type = CheckType.TEXT_MATCHES, rules = listOf(AllowRule("(?i)free.*money", isRegex = true)))
+
+        val merged = StepChecks.addRule(check, AllowRule("(?i)FREE.*MONEY", isRegex = true))
+
+        assertEquals(1, merged.rules.size)
+    }
+
+    @Test
+    fun `normalize deduplicates keywords case-insensitively`() {
+        val checks = listOf(
+            CheckSpec(type = CheckType.TEXT_MATCHES, rules = listOf(AllowRule("Lottery"))),
+            CheckSpec(type = CheckType.TEXT_MATCHES, rules = listOf(AllowRule("lottery")))
+        )
+
+        assertEquals(listOf("Lottery"), StepChecks.normalize(checks)[0].rules.map { it.pattern })
+    }
+
+    @Test
     fun `a regex and a plain word with the same text are distinct`() {
         val check = CheckSpec(type = CheckType.TEXT_MATCHES, rules = listOf(AllowRule("win", isRegex = false)))
 
