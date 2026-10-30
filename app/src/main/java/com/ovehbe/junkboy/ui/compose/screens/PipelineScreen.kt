@@ -699,11 +699,13 @@ private fun StepEditorDialog(
 ) {
     var name by remember { mutableStateOf(initial.name) }
     var mode by remember { mutableStateOf(initial.mode) }
-    var checks by remember { mutableStateOf(initial.checks) }
+    // Opening the editor also repairs steps saved before checks were merged by type.
+    var checks by remember { mutableStateOf(StepChecks.normalize(initial.checks)) }
     var actions by remember { mutableStateOf(initial.actions) }
     var addCheckMenu by remember { mutableStateOf(false) }
     var addActionMenu by remember { mutableStateOf(false) }
     var ruleTarget by remember { mutableStateOf<Pair<Int, CheckType>?>(null) }
+    var addCheckNotice by remember { mutableStateOf("") }
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -747,17 +749,40 @@ private fun StepEditorDialog(
                                     text = { Text(checkTypeLabel(type)) },
                                     onClick = {
                                         addCheckMenu = false
-                                        if (type == CheckType.TEXT_MATCHES || type == CheckType.SENDER_MATCHES) {
-                                            ruleTarget = checks.size to type
-                                            checks = checks + CheckSpec(type = type)
-                                        } else {
-                                            checks = checks + CheckSpec(type = type)
+                                        addCheckNotice = ""
+                                        val existing = StepChecks.indexOf(checks, type)
+                                        when {
+                                            // Words and senders accumulate in one check instead of
+                                            // adding a second row that would mean "both must match".
+                                            type == CheckType.TEXT_MATCHES ||
+                                                type == CheckType.SENDER_MATCHES -> {
+                                                if (existing >= 0) {
+                                                    ruleTarget = existing to type
+                                                } else {
+                                                    checks = checks + CheckSpec(type = type)
+                                                    ruleTarget = checks.size - 1 to type
+                                                }
+                                            }
+                                            existing >= 0 -> {
+                                                addCheckNotice =
+                                                    "This step already has a ${checkTypeLabel(type)} " +
+                                                        "check. Edit it below to change it."
+                                            }
+                                            else -> checks = checks + CheckSpec(type = type)
                                         }
                                     }
                                 )
                             }
                         }
                     }
+                }
+
+                if (addCheckNotice.isNotEmpty()) {
+                    Text(
+                        addCheckNotice,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error
+                    )
                 }
 
                 checks.forEachIndexed { index, check ->
@@ -821,7 +846,16 @@ private fun StepEditorDialog(
         confirmButton = {
             TextButton(
                 enabled = name.isNotBlank(),
-                onClick = { onSave(initial.copy(name = name.trim(), mode = mode, checks = checks, actions = actions)) }
+                onClick = {
+                    onSave(
+                        initial.copy(
+                            name = name.trim(),
+                            mode = mode,
+                            checks = StepChecks.normalize(checks),
+                            actions = actions
+                        )
+                    )
+                }
             ) { Text("Save") }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } }
@@ -833,8 +867,12 @@ private fun StepEditorDialog(
             title = if (target.second == CheckType.TEXT_MATCHES) "Words in the message" else "Senders",
             onDismiss = { ruleTarget = null },
             onAdd = { rule ->
-                checks = checks.toMutableList().also { list ->
-                    list[target.first] = list[target.first].copy(rules = list[target.first].rules + rule)
+                val current = checks[target.first]
+                val merged = StepChecks.addRule(current, rule)
+                if (merged == current) {
+                    addCheckNotice = "That rule is already in this check."
+                } else {
+                    checks = checks.toMutableList().also { list -> list[target.first] = merged }
                 }
                 ruleTarget = null
             }
