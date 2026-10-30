@@ -20,3 +20,9 @@ Earlier feature sets are in the same folder, numbered 01-22.
 | Durable pipeline export next to local snapshots | `screenshots/review-fixes-snapshot-export.png` |
 | Lifetime rule activity, independent of message retention | `screenshots/review-fixes-step-activity.png` |
 | Test queue after the reply/block attribution fix | `screenshots/review-fixes-test-queue.png` |
+
+## Merged check types (1.4.9)
+
+| Change | Screenshot |
+|---|---|
+| Words and senders accumulate in one check instead of adding duplicate rows | `screenshots/feature-merged-checks.png` |
